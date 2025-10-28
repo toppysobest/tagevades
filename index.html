@@ -1,0 +1,696 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8" />
+<title>Evades + TagPro Movement — Areas, Spawn Side, Orientation</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<style>
+  :root { --bg:#0e1116; --panel:#121722; --muted:#8aa0c4; }
+  html, body { height:100%; }
+  body { margin:0; background:var(--bg); color:#d9e5ff; font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; }
+  header { display:flex; gap:12px; align-items:center; padding:10px 12px; background:#0b0f16; border-bottom:1px solid #0f1624; position:sticky; top:0; z-index:3; flex-wrap:wrap; }
+  select, button, label { background:var(--panel); color:#e8f1ff; border:1px solid #20314b; border-radius:10px; padding:8px 10px; font-weight:600; }
+  label { display:flex; align-items:center; gap:8px; }
+  button { cursor:pointer; }
+  fieldset { border:1px solid #20314b; border-radius:10px; padding:6px 10px; display:flex; gap:10px; align-items:center; background:var(--panel); }
+  fieldset legend { padding:0 6px; color:#9db4d9; }
+  .hint { color:#9db4d9; font-size:12px; margin-left:auto; }
+  #wrap { display:grid; place-items:center; padding:10px; height: calc(100% - 50px); }
+  canvas { display:block; background:#0f1520; border:2px solid #0c1320; border-radius:12px; box-shadow:0 16px 50px rgba(0,0,0,.45); }
+  #hud { position: fixed; right: 12px; top: 12px; background: rgba(7,10,16,0.85); border:1px solid #132033; border-radius:12px; padding:10px 12px; z-index:4; min-width:190px; box-shadow:0 10px 30px rgba(0,0,0,.45); }
+  #hud h4 { margin:0 0 6px; font-size:13px; color:#c7d8ff; letter-spacing:.3px }
+  .row { display:flex; justify-content:space-between; font-size:13px; color:#b7c7e6; margin:3px 0; }
+  #hit { color:#ff6a6a; font-weight:900; letter-spacing:1px; display:none; }
+  .legend { position: fixed; left: 12px; bottom: 12px; background:#0a0f18; border:1px solid #122039; padding:8px 10px; border-radius:10px; color:#a8c0eb; font-size:12px; z-index:4; }
+  .pill { display:inline-block; padding:2px 8px; border-radius:999px; background:#0f1a2b; border:1px solid #1a2a47; margin-right:6px; }
+  .hidden { display:none; }
+  .row2 { display:flex; gap:12px; align-items:center; flex-wrap:wrap; }
+  .radio { display:flex; gap:10px; align-items:center; }
+  .radio input { margin-right:6px; }
+</style>
+<script src="maps.js"></script>
+<!-- Box2D -->
+<script src="https://cdn.jsdelivr.net/gh/BambiTP/box2dcdn@main/Box2dWeb-2.1.a.3.js"></script>
+</head>
+<body>
+
+<header>
+  <label>World:
+    <select id="mapSelect"></select>
+  </label>
+  <button id="startBtn">Start</button>
+
+  <div id="areaControls" class="row2 hidden">
+    <label>Area:
+      <select id="areaSelect"></select>
+    </label>
+
+    <fieldset id="spawnSideBox" class="radio">
+      <legend>Spawn side</legend>
+      <label class="radio"><input type="radio" name="spawnSide" value="left" checked> Left</label>
+      <label class="radio"><input type="radio" name="spawnSide" value="right"> Right</label>
+      <button id="goBtn">Go</button>
+    </fieldset>
+
+    <fieldset id="orientBox" class="radio">
+      <legend>Orientation</legend>
+      <label class="radio"><input type="radio" name="orient" value="0" checked> Horizontal (0°)</label>
+      <label class="radio"><input type="radio" name="orient" value="90"> Vertical (90°)</label>
+      <label class="radio"><input type="radio" name="orient" value="45"> Diagonal (45°)</label>
+    </fieldset>
+  </div>
+
+  <span class="hint">WASD/Arrows — TagPro accel/topSpeed/maxSpeed</span>
+</header>
+
+<div id="wrap">
+  <canvas id="game" width="1200" height="720"></canvas>
+</div>
+
+<div id="hud">
+  <h4>Session</h4>
+  <div class="row"><span>Map</span><strong id="hudMap">—</strong></div>
+  <div class="row"><span>Area</span><strong id="hudArea">—</strong></div>
+  <div class="row"><span>Enemies</span><strong id="hudEnemies">0</strong></div>
+  <div class="row"><span>Overlap</span><strong id="hit">HIT!</strong></div>
+</div>
+
+<div class="legend">
+  <span class="pill">Safe</span>
+  <span class="pill" style="background:#0b1323;border-color:#16305a;">Active</span>
+  <span class="pill" style="background:#17232f;border-color:#22425e;">Exit/Teleport</span>
+  <span class="pill" style="background:#20313f;border-color:#385672;">Player</span>
+  <span class="pill" style="background:#35253e;border-color:#504460;">Enemy</span>
+</div>
+
+<script>
+/* =======================================================================================
+   Customizable ball look (no PIXI)
+   - color: CSS color or hex
+   - opacity: 0..1 (fill)
+   - ring: dashed white rim similar to your screenshot
+======================================================================================= */
+const BALL_STYLE = {
+  color: '#c02b2b',   // try '#9bd1ff' or any CSS color
+  opacity: 0.85,      // 0.1 .. 1.0
+  ring: true          // set to false for solid only
+};
+
+/* =======================================================================================
+   TagPro movement constants (edit freely)
+======================================================================================= */
+const pixelsPerTPU = 100;
+const playerProps = {
+  radiusTPU: 0.19,   // physical radius in TPU (visual ~19 px at 100 px/TPU)
+  accel: 0.8,       // per 60 Hz tick
+  topSpeed: 27.0,     // soft cap
+  maxSpeed: 36.0      // hard cap
+};
+const PLAYER_R_PX = Math.round(playerProps.radiusTPU * pixelsPerTPU);
+
+/* =======================================================================================
+   Math / vector
+======================================================================================= */
+class V { constructor(x=0,y=0){this.x=x;this.y=y;} clone(){return new V(this.x,this.y)} add(v){this.x+=v.x;this.y+=v.y;return this}
+  sub(v){this.x-=v.x;this.y-=v.y;return this} mul(s){this.x*=s;this.y*=s;return this} len(){return Math.hypot(this.x,this.y)}
+  norm(){const l=this.len()||1;this.x/=l;this.y/=l;return this} set(x,y){this.x=x;this.y=y;return this}
+  static dist(a,b){return Math.hypot(a.x-b.x,a.y-b.y)} }
+const clamp=(v,a,b)=>Math.max(a,Math.min(b,v));
+const rand=(a,b)=>a+Math.random()*(b-a);
+const randi=(a,b)=>Math.floor(a+Math.random()*(b-a+1));
+const angleToVel=(ang,s)=>new V(Math.cos(ang)*s,Math.sin(ang)*s);
+function rotVec(x,y,ang){ const c=Math.cos(ang), s=Math.sin(ang); return new V(x*c - y*s, x*s + y*c); }
+
+/* =======================================================================================
+   Canvas / camera
+======================================================================================= */
+const canvas = document.getElementById('game');
+const ctx = canvas.getContext('2d');
+const camera = { x:0, y:0, lerp:0.15 };
+function worldToScreen(x,y){ return { x: Math.round(x - camera.x + canvas.width/2), y: Math.round(y - camera.y + canvas.height/2) }; }
+function centerOn(target){ camera.x += (target.x - camera.x) * camera.lerp; camera.y += (target.y - camera.y) * camera.lerp; }
+
+/* =======================================================================================
+   Input (TagPro-style most-recent key conflict rule)
+======================================================================================= */
+const keys = new Set();
+const lastPressTime = { left:0, right:0, up:0, down:0 };
+window.addEventListener('keydown', e=>{
+  if (['ArrowUp','ArrowDown','ArrowLeft','ArrowRight',' '].includes(e.key)) e.preventDefault();
+  const t = performance.now();
+  switch(e.key){
+    case 'ArrowLeft': case 'a': case 'A': keys.add('left');  lastPressTime.left=t;  break;
+    case 'ArrowRight':case 'd': case 'D': keys.add('right'); lastPressTime.right=t; break;
+    case 'ArrowUp':   case 'w': case 'W': keys.add('up');    lastPressTime.up=t;    break;
+    case 'ArrowDown': case 's': case 'S': keys.add('down');  lastPressTime.down=t;  break;
+  }
+},{passive:false});
+window.addEventListener('keyup', e=>{
+  switch(e.key){
+    case 'ArrowLeft': case 'a': case 'A': keys.delete('left'); break;
+    case 'ArrowRight':case 'd': case 'D': keys.delete('right'); break;
+    case 'ArrowUp':   case 'w': case 'W': keys.delete('up');    break;
+    case 'ArrowDown': case 's': case 'S': keys.delete('down');  break;
+  }
+});
+
+/* =======================================================================================
+   Find maps in maps.js
+======================================================================================= */
+function findMapGlobals(){
+  const out=[]; for(const k in window){ try{ const v=window[k]; if (v && typeof v==='object' && v.name && Array.isArray(v.areas)) out.push({key:k,map:v}); }catch{} }
+  return out.sort((a,b)=> String(a.map.name).localeCompare(String(b.map.name)));
+}
+const FOUND = findMapGlobals();
+
+/* =======================================================================================
+   Rect / zones helpers
+======================================================================================= */
+function rectContains(r, x,y){ return x>=r.x && x<=r.x+r.w && y>=r.y && y<=r.y+r.h; }
+function rectClamp(r, p, radius=0){ p.x = clamp(p.x, r.x+radius, r.x+r.w-radius); p.y = clamp(p.y, r.y+radius, r.y+r.h-radius); }
+function circleIntersectsRect(cx, cy, cr, r){
+  const tx = Math.max(r.x, Math.min(cx, r.x + r.w));
+  const ty = Math.max(r.y, Math.min(cy, r.y + r.h));
+  const dx = cx - tx, dy = cy - ty;
+  return (dx*dx + dy*dy) <= cr*cr;
+}
+function unionOfRects(rects){
+  let minX=Infinity,minY=Infinity,maxX=-Infinity,maxY=-Infinity;
+  for(const r of rects){ minX=Math.min(minX,r.x); minY=Math.min(minY,r.y); maxX=Math.max(maxX,r.x+r.w); maxY=Math.max(maxY,r.y+r.h); }
+  if(!rects.length) return {x:0,y:0,w:0,h:0};
+  return { x:minX, y:minY, w:maxX-minX, h:maxY-minY };
+}
+function touchesEdge(z, b, edge){
+  if(edge==='left')   return Math.abs(z.x - b.x) < 1;
+  if(edge==='right')  return Math.abs((z.x+z.w) - (b.x+b.w)) < 1;
+  if(edge==='top')    return Math.abs(z.y - b.y) < 1;
+  if(edge==='bottom') return Math.abs((z.y+z.h) - (b.y+b.h)) < 1;
+  return false;
+}
+function edgeOf(rect, bounds){
+  const cx = rect.x + rect.w/2, cy = rect.y + rect.h/2;
+  const dl = Math.abs(cx - bounds.x);
+  const dr = Math.abs((bounds.x + bounds.w) - cx);
+  const dt = Math.abs(cy - bounds.y);
+  const db = Math.abs((bounds.y + bounds.h) - cy);
+  const m = Math.min(dl,dr,dt,db);
+  if (m===dl) return 'left';
+  if (m===dr) return 'right';
+  if (m===dt) return 'top';
+  return 'bottom';
+}
+
+/* =======================================================================================
+   Token resolver → bake areas/zones/spawners/bounds
+======================================================================================= */
+function resolveAreasWithTokens(map){
+  const out = JSON.parse(JSON.stringify(map));
+  let prevAreaBox = { right:0, yBase:0 };
+
+  out.areas = out.areas.map((area)=>{
+    let baseX = (typeof area.x==='number') ? area.x : (area.x==='last_right' ? prevAreaBox.right : 0);
+    let baseY = (typeof area.y==='number') ? area.y : (area.y==='last_y'    ? prevAreaBox.yBase : 0);
+
+    const baked = [];
+    let lastRect = null;
+    for (const z of area.zones) {
+      const w = (typeof z.width  === 'number') ? z.width  : (z.width  === 'last_width'  && lastRect ? lastRect.w : 0);
+      const h = (typeof z.height === 'number') ? z.height : (z.height === 'last_height' && lastRect ? lastRect.h : 0);
+      let x = (typeof z.x === 'number') ? z.x : (z.x==='last_right' && lastRect ? lastRect.x + lastRect.w : 0);
+      let y = (typeof z.y === 'number') ? z.y : (z.y==='last_y'    && lastRect ? lastRect.y : 0);
+      if (z.x === 'var x') x = 0; if (z.y === 'var y') y = 0;
+      const r = { x: baseX + x, y: baseY + y, w, h, type:z.type, translate:z.translate||null, properties:z.properties||{} };
+      baked.push(r); lastRect=r;
+    }
+
+    const safe = baked.filter(z=>z.type==='safe');
+    const exits= baked.filter(z=>z.type==='exit');
+    const tele = baked.filter(z=>z.type==='teleport');
+
+    let pb=null, maxA=-1;
+    for(const r of baked){ if (r.type==='active'){ const a=r.w*r.h; if(a>maxA){maxA=a; pb=r;} } }
+    if(!pb) pb = unionOfRects(baked);
+
+    const walk = unionOfRects(baked);
+
+    const spawners=[];
+    let sid=1;
+    for (let i=0;i<area.zones.length;i++){
+      const src = area.zones[i];
+      if(!Array.isArray(src.spawner)) continue;
+      const rect = baked[i];
+      for(const spec of src.spawner){
+        const types = Array.isArray(spec.types)&&spec.types.length ? spec.types.slice() : ['normal'];
+        spawners.push({ _id:'S'+(sid++), rect, count: spec.count|0, r: Number(spec.radius)||12, speed: Number(spec.speed)||4, types });
+      }
+    }
+
+    const box = unionOfRects(baked);
+    prevAreaBox = { right: box.x + box.w, yBase: baseY };
+
+    return { x:baseX, y:baseY, zones:baked, _safe:safe, _exits:exits, _tele:tele, _spawners:spawners, _playBounds:pb, _walkBounds:walk };
+  });
+
+  return { name: out.name, properties: out.properties||{}, areas: out.areas };
+}
+function resolveMap(mapObj){ return resolveAreasWithTokens(mapObj); }
+
+/* =======================================================================================
+   Enemies + collisions (bounce off safe/exit/tele)
+======================================================================================= */
+class Enemy {
+  constructor(x,y,r=12,s=80,ang=Math.random()*Math.PI*2,color='#b07bc9',type='normal'){
+    this.pos=new V(x,y); this.r=r; this.speed=s; this.ang=ang; this.vel=angleToVel(ang,s);
+    this.type=type; this.color=color; this.clock=0; this.cool=rand(0.8,2.1); this.dashing=0; this.baseSpeed=s;
+    this.homing=(type==='homing'||type==='sticky_sniper'); this.turning=(type==='wavy'||type==='spiral'); this.dasher=(type==='dasher');
+  }
+  update(dt, player){
+    this.clock+=dt;
+    if (this.homing){
+      const dx=player.x-this.pos.x, dy=player.y-this.pos.y; const target=Math.atan2(dy,dx);
+      let diff=Math.atan2(Math.sin(target-this.ang), Math.cos(target-this.ang)); const maxTurn=2.0*dt; diff=clamp(diff,-maxTurn,maxTurn); this.ang+=diff;
+    }
+    if (this.turning){ this.ang += Math.sin(this.clock*2.2) * 0.6 * dt; }
+    if (this.dasher){
+      if (this.dashing>0){ this.dashing-=dt; }
+      else { this.cool -= dt;
+        if (this.cool<=0){ const dx=player.x-this.pos.x, dy=player.y-this.pos.y; this.ang=Math.atan2(dy,dx); this.speed=this.baseSpeed*3.0; this.dashing=0.18; this.cool=rand(0.8,2.2); }
+        else if (this.speed>this.baseSpeed) this.speed=Math.max(this.baseSpeed, this.speed-200*dt);
+      }
+    }
+    this.vel=angleToVel(this.ang,this.speed);
+    this.pos.add(this.vel.clone().mul(dt));
+  }
+  draw(){
+    const s=worldToScreen(this.pos.x,this.pos.y);
+    ctx.beginPath(); ctx.fillStyle=this.color; ctx.arc(s.x,s.y,this.r,0,Math.PI*2); ctx.fill();
+    ctx.beginPath(); ctx.moveTo(s.x,s.y);
+    ctx.lineTo(s.x + Math.cos(this.ang)*Math.max(14,this.r), s.y + Math.sin(this.ang)*Math.max(14,this.r));
+    ctx.strokeStyle="#0008"; ctx.lineWidth=2; ctx.stroke();
+  }
+}
+function enemyColorFor(type){
+  switch(type){
+    case 'normal': return '#90b8ff';
+    case 'homing': case 'sticky_sniper': return '#f3a44d';
+    case 'wavy': case 'spiral': return '#b97bf1';
+    case 'dasher': return '#ff7676';
+    case 'wall': return '#e3cc6a';
+    default: return '#b9b9b9';
+  }
+}
+function maintainSpawns(area){
+  for(const s of area._spawners){
+    let alive=0; for(const e of GAME.enemies){ if(e._recipeId===s._id) alive++; }
+    while(alive < s.count){
+      const x = rand(s.rect.x + s.r, s.rect.x + s.rect.w - s.r);
+      const y = rand(s.rect.y + s.r, s.rect.y + s.rect.h - s.r);
+      const type = s.types[randi(0, s.types.length-1)];
+      const enemy = new Enemy(x,y, s.r, s.speed*20, Math.random()*Math.PI*2, enemyColorFor(type), type);
+      enemy._recipeId = s._id; GAME.enemies.push(enemy); alive++;
+    }
+  }
+}
+function circleIntersectsRectPen(cx,cy,cr,r){
+  const tx = Math.max(r.x, Math.min(cx, r.x + r.w));
+  const ty = Math.max(r.y, Math.min(cy, r.y + r.h));
+  const dx = cx - tx, dy = cy - ty, d2 = dx*dx+dy*dy;
+  if (d2 > cr*cr) return null;
+  const penLeft   = (cx + cr) - r.x;
+  const penRight  = (r.x + r.w) - (cx - cr);
+  const penTop    = (cy + cr) - r.y;
+  const penBottom = (r.y + r.h) - (cy - cr);
+  return [{dir:'left',pen:penLeft},{dir:'right',pen:penRight},{dir:'top',pen:penTop},{dir:'bottom',pen:penBottom}]
+    .filter(c=>c.pen>0).sort((a,b)=>a.pen-b.pen)[0]||null;
+}
+function enemyCollisions(area, e){
+  const pb = area._playBounds, r=e.r, eps=0.5;
+  if (e.pos.x < pb.x + r){ e.pos.x = pb.x + r + eps; e.ang = Math.PI - e.ang; }
+  if (e.pos.x > pb.x + pb.w - r){ e.pos.x = pb.x + pb.w - r - eps; e.ang = Math.PI - e.ang; }
+  if (e.pos.y < pb.y + r){ e.pos.y = pb.y + r + eps; e.ang = -e.ang; }
+  if (e.pos.y > pb.y + pb.h - r){ e.pos.y = pb.y + pb.h - r - eps; e.ang = -e.ang; }
+  const blockers=[...area._safe, ...area._exits, ...area._tele];
+  for(const b of blockers){
+    const hit=circleIntersectsRectPen(e.pos.x,e.pos.y,e.r,b);
+    if(!hit) continue;
+    const eps2=0.8;
+    if (hit.dir==='left'){ e.pos.x=b.x - e.r - eps2; e.ang=Math.PI-e.ang; }
+    else if (hit.dir==='right'){ e.pos.x=b.x+b.w + e.r + eps2; e.ang=Math.PI-e.ang; }
+    else if (hit.dir==='top'){ e.pos.y=b.y - e.r - eps2; e.ang=-e.ang; }
+    else { e.pos.y=b.y+b.h + e.r + eps2; e.ang=-e.ang; }
+  }
+}
+
+/* =======================================================================================
+   Game state + UI
+======================================================================================= */
+const GAME = {
+  maps: FOUND.map(f=>f.map),
+  mapIndex: 0,
+  current: null,
+  areaIndex: 0,
+  enemies: [],
+  started:false,
+  viewAngle: 0,       // radians (0, PI/2, PI/4)
+  transitCooldown: 0
+};
+
+/* =======================================================================================
+   Transitions (right/left within map; top/bottom between worlds only from Area 0)
+======================================================================================= */
+function resolveDestination(side){
+  if (side==='left' || side==='right'){
+    const next = GAME.areaIndex + (side==='right'? +1 : -1);
+    if (next < 0 || next >= GAME.current.areas.length) return null;
+    return { mapIndex: GAME.mapIndex, areaIndex: next };
+  }
+  if (GAME.areaIndex !== 0) return null;
+  let nextMap = GAME.mapIndex + (side==='bottom'? +1 : -1);
+  if (nextMap < 0 || nextMap >= GAME.maps.length) return null;
+  return { mapIndex: nextMap, areaIndex: 0 };
+}
+function touchesEntranceSafe(area, edge, x0, y0){
+  return area._safe.find(z => touchesEdge(z, area._playBounds, edge) && x0>=z.x-1 && x0<=z.x+z.w+1 && y0>=z.y-1 && y0<=z.y+z.h+1) || null;
+}
+
+/* =======================================================================================
+   Box2D world + player body + TagPro movement
+======================================================================================= */
+let WORLD=null;
+const b2Vec2 = Box2D.Common.Math.b2Vec2, b2World = Box2D.Dynamics.b2World, b2BodyDef=Box2D.Dynamics.b2BodyDef,
+      b2Body=Box2D.Dynamics.b2Body, b2FixtureDef=Box2D.Dynamics.b2FixtureDef, b2CircleShape=Box2D.Collision.Shapes.b2CircleShape;
+const PLAYER={ body:null };
+
+function initPhysics(){ WORLD = new b2World(new b2Vec2(0,0), true); }
+function createPlayerBody(px, py){
+  const bd=new b2BodyDef(); bd.type=b2Body.b2_dynamicBody; bd.position.Set(px/pixelsPerTPU, py/pixelsPerTPU);
+  bd.linearDamping=0.5; bd.angularDamping=0.5; bd.bullet=true;
+  const body=WORLD.CreateBody(bd);
+  const fd=new b2FixtureDef(); fd.shape=new b2CircleShape(playerProps.radiusTPU); fd.density=1; fd.friction=0.5; fd.restitution=0.2;
+  body.CreateFixture(fd);
+  PLAYER.body = body;
+}
+
+function applyMovement(){
+  if(!PLAYER.body) return;
+  const L=keys.has('left'), R=keys.has('right'), U=keys.has('up'), D=keys.has('down');
+
+  // Resolve conflicts (most-recent)
+  let hx=0, hy=0;
+  if (L && R) hx = (lastPressTime.right > lastPressTime.left) ? +1 : -1; else if (L) hx=-1; else if (R) hx=+1;
+  if (U && D) hy = (lastPressTime.down  > lastPressTime.up)   ? +1 : -1; else if (U) hy=-1; else if (D) hy=+1;
+
+  // Screen input → rotate to world so "up" on screen is up regardless of viewAngle
+  let ix=hx, iy=hy;
+  if (ix||iy){
+    const n = 1/Math.hypot(ix,iy); ix*=n; iy*=n;
+    const wv = rotVec(ix, iy, -GAME.viewAngle); // inverse
+    const v=PLAYER.body.GetLinearVelocity();
+    let vx=v.x + wv.x*playerProps.accel;
+    let vy=v.y + wv.y*playerProps.accel;
+
+    // Soft clamp then hard cap
+    let sp=Math.hypot(vx,vy);
+    if (sp>playerProps.topSpeed){ const s=playerProps.topSpeed/sp; vx*=s; vy*=s; sp=playerProps.topSpeed; }
+    if (sp>playerProps.maxSpeed){ const s=playerProps.maxSpeed/sp; vx*=s; vy*=s; }
+    PLAYER.body.SetLinearVelocity(new b2Vec2(vx,vy));
+    PLAYER.body.SetAwake(true);
+  }
+}
+
+/* =======================================================================================
+   Spawns & area UI helpers
+======================================================================================= */
+function resolveMapTop(mapObj){ return resolveAreasWithTokens(mapObj); } // alias for clarity
+
+function pickInitialSpawn(area){
+  const pb = area._playBounds;
+  const leftSafe = area._safe.find(s => touchesEdge(s, pb, 'left'));
+  if (leftSafe) return new V(leftSafe.x + 10, leftSafe.y + leftSafe.h/2);
+  if (area._safe[0]) return new V(area._safe[0].x + area._safe[0].w/2, area._safe[0].y + area._safe[0].h/2);
+  return new V(pb.x + pb.w*0.1, pb.y + pb.h*0.5);
+}
+function pickSpawnInSafe(area, side){
+  const pb = area._playBounds, target = (side==='left')?'left':'right';
+  const s = area._safe.find(z => touchesEdge(z, pb, target));
+  const eps=6;
+  if (s){
+    const x = (side==='left') ? s.x + eps : (s.x + s.w - eps);
+    return new V(x, s.y + s.h/2);
+  }
+  const x = (side==='left') ? pb.x + eps : (pb.x + pb.w - eps);
+  return new V(x, pb.y + pb.h/2);
+}
+function jumpToArea(areaIndex, spawnSide){
+  if (!GAME.current) return;
+  if (areaIndex < 0 || areaIndex >= GAME.current.areas.length) return;
+  GAME.areaIndex = areaIndex;
+  GAME.enemies.length = 0;
+  const area = GAME.current.areas[areaIndex];
+  const pt = pickSpawnInSafe(area, spawnSide);
+  PLAYER.body.SetPosition(new b2Vec2(pt.x/pixelsPerTPU, pt.y/pixelsPerTPU));
+  PLAYER.body.SetLinearVelocity(new b2Vec2(0,0));
+  camera.x = pt.x; camera.y = pt.y;
+  document.getElementById('hudArea').textContent = `${GAME.areaIndex} / ${GAME.current.areas.length-1}`;
+  const areaSelect=document.getElementById('areaSelect'); if(areaSelect.options.length) areaSelect.value=String(GAME.areaIndex);
+}
+
+/* =======================================================================================
+   Transitions spawn (Box2D)
+======================================================================================= */
+function spawnJustInsideBox2D(dest, side, lane01){
+  if (dest.mapIndex !== GAME.mapIndex){
+    GAME.mapIndex = dest.mapIndex;
+    GAME.current = resolveMapTop(GAME.maps[GAME.mapIndex]);
+    buildAreaUI();
+  }
+  GAME.areaIndex = dest.areaIndex;
+  GAME.enemies.length = 0;
+
+  const area = GAME.current.areas[GAME.areaIndex];
+  const pb = area._playBounds;
+  const eps = 2;
+  let x0,y0;
+  if (side==='right'){ x0=pb.x + eps;               y0=pb.y + lane01*pb.h; }
+  else if (side==='left'){ x0=pb.x + pb.w - eps;    y0=pb.y + lane01*pb.h; }
+  else if (side==='top'){ x0=pb.x + lane01*pb.w;    y0=pb.y + pb.h - eps; }
+  else { x0=pb.x + lane01*pb.w;                     y0=pb.y + eps; }
+
+  const entranceEdge = (side==='right')?'left' : (side==='left')?'right' : (side==='top')?'bottom':'top';
+  const s = touchesEntranceSafe(area, entranceEdge, x0, y0);
+  if (s){
+    if (entranceEdge==='left')   x0 = Math.max(x0, s.x + 2);
+    if (entranceEdge==='right')  x0 = Math.min(x0, s.x + s.w - 2);
+    if (entranceEdge==='top')    y0 = Math.max(y0, s.y + 2);
+    if (entranceEdge==='bottom') y0 = Math.min(y0, s.y + s.h - 2);
+  }
+  rectClamp(area._walkBounds, {x:x0,y:y0}, 0);
+  PLAYER.body.SetPosition(new b2Vec2(x0/pixelsPerTPU, y0/pixelsPerTPU));
+  PLAYER.body.SetLinearVelocity(new b2Vec2(0,0));
+
+  document.getElementById('hudMap').textContent = GAME.current.name || '—';
+  document.getElementById('hudArea').textContent = `${GAME.areaIndex} / ${GAME.current.areas.length-1}`;
+  const areaSelect=document.getElementById('areaSelect'); if(areaSelect.options.length) areaSelect.value=String(GAME.areaIndex);
+}
+function performTransition(z, area, playerPx){
+  const side = edgeOf(z, area._playBounds);
+  const lane = (side==='left'||side==='right') ? (playerPx.y - z.y) / z.h : (playerPx.x - z.x) / z.w;
+  const dest = resolveDestination(side);
+  if (!dest) return;
+  spawnJustInsideBox2D(dest, side, clamp(lane,0,1));
+}
+
+/* =======================================================================================
+   Start / build UI
+======================================================================================= */
+const mapSelect = document.getElementById('mapSelect');
+const areaSelect = document.getElementById('areaSelect');
+const areaControls = document.getElementById('areaControls');
+
+function populateMapList(){
+  mapSelect.innerHTML = FOUND.length ? FOUND.map((f,i)=> `<option value="${i}">${f.map.name||f.key}</option>`).join('') : `<option>(no maps found)</option>`;
+}
+populateMapList();
+
+function buildAreaUI(){
+  if (!GAME.current){ areaControls.classList.add('hidden'); return; }
+  const A = GAME.current.areas;
+  areaSelect.innerHTML = A.map((a,i)=> `<option value="${i}">Area ${i}</option>`).join('');
+  areaSelect.value = String(GAME.areaIndex);
+  areaControls.classList.remove('hidden');
+}
+
+function startSelected(mapObj, mapIdx){
+  GAME.mapIndex = mapIdx;
+  GAME.current = resolveMapTop(mapObj);
+  GAME.areaIndex = 0;
+  GAME.enemies.length=0;
+
+  const first = GAME.current.areas[0];
+  const spawn = pickInitialSpawn(first);
+
+  initPhysics();
+  createPlayerBody(spawn.x, spawn.y);
+
+  GAME.started = true;
+  camera.x = spawn.x; camera.y = spawn.y;
+  document.getElementById('hudMap').textContent = GAME.current.name || '—';
+  document.getElementById('hudArea').textContent = `0 / ${GAME.current.areas.length-1}`;
+  buildAreaUI();
+}
+
+document.getElementById('startBtn').addEventListener('click', ()=>{
+  if (!GAME.maps.length){ alert("No maps found. Put your maps.js next to this HTML."); return; }
+  const idx = Number(mapSelect.value)||0;
+  startSelected(GAME.maps[idx], idx);
+});
+areaSelect.addEventListener('change', ()=>{
+  const idx = Number(areaSelect.value)||0;
+  const side = document.querySelector('input[name="spawnSide"]:checked')?.value || 'left';
+  jumpToArea(idx, side);
+});
+document.getElementById('goBtn').addEventListener('click', ()=>{
+  const idx = Number(areaSelect.value)||0;
+  const side = document.querySelector('input[name="spawnSide"]:checked')?.value || 'left';
+  jumpToArea(idx, side);
+});
+document.getElementById('orientBox').addEventListener('change', ()=>{
+  const val = document.querySelector('input[name="orient"]:checked')?.value || '0';
+  const deg = Number(val);
+  GAME.viewAngle = deg * Math.PI / 180;
+});
+
+/* =======================================================================================
+   Main loop (physics + zones + transitions) and drawing
+======================================================================================= */
+let last = performance.now(), accumulator=0;
+const fixed = 1/60;
+
+function tick(now){
+  const dt = Math.min(0.05, (now-last)/1000); last=now;
+  if (GAME.started && PLAYER.body){
+    // Physics
+    accumulator += dt;
+    while(accumulator >= fixed){
+      applyMovement();
+      WORLD.Step(fixed, 8, 3);
+      WORLD.ClearForces();
+      accumulator -= fixed;
+    }
+
+    // Sync player pixel position and clamp to walk bounds
+    const p = PLAYER.body.GetPosition();
+    const playerPx = { x:p.x*pixelsPerTPU, y:p.y*pixelsPerTPU };
+    const area = GAME.current.areas[GAME.areaIndex];
+    rectClamp(area._walkBounds, playerPx, PLAYER_R_PX);
+    PLAYER.body.SetPosition(new b2Vec2(playerPx.x/pixelsPerTPU, playerPx.y/pixelsPerTPU));
+
+    // Enemies
+    maintainSpawns(area);
+    for (const e of GAME.enemies){ e.update(dt, playerPx); enemyCollisions(area, e); }
+
+    // Transitions
+    if (GAME.transitCooldown>0) GAME.transitCooldown-=dt;
+    if (GAME.transitCooldown<=0){
+      for (const z of [...area._exits, ...area._tele]){
+        if (!circleIntersectsRect(playerPx.x, playerPx.y, PLAYER_R_PX, z)) continue;
+        if (z.type==='teleport' && z.translate && (typeof z.translate.x==='number' || typeof z.translate.y==='number')){
+          const nx = playerPx.x + (z.translate.x||0), ny = playerPx.y + (z.translate.y||0);
+          PLAYER.body.SetPosition(new b2Vec2(nx/pixelsPerTPU, ny/pixelsPerTPU));
+          GAME.transitCooldown = 0.1;
+        } else {
+          performTransition(z, area, playerPx);
+          GAME.transitCooldown = 0.15;
+        }
+        break;
+      }
+    }
+
+    centerOn(playerPx);
+  }
+
+  draw();
+  requestAnimationFrame(tick);
+}
+requestAnimationFrame(tick);
+
+/* Draw dashed ring helper */
+function drawDashedRing(x,y,r,thickness=3){
+  ctx.save();
+  ctx.setLineDash([r*0.6, r*0.6]);
+  ctx.lineWidth = thickness;
+  ctx.strokeStyle = '#ffffff';
+  ctx.globalAlpha = 1.0;
+  ctx.beginPath();
+  ctx.arc(x,y,r-ctx.lineWidth*0.5, 0, Math.PI*2);
+  ctx.stroke();
+  ctx.restore();
+}
+
+function draw(){
+  ctx.clearRect(0,0,canvas.width,canvas.height);
+
+  // rotate the entire view
+  ctx.save();
+  ctx.translate(canvas.width/2, canvas.height/2);
+  ctx.rotate(GAME.viewAngle);
+  ctx.translate(-canvas.width/2, -canvas.height/2);
+
+  // grid
+  const g=32, offx=(-camera.x+canvas.width/2)%g, offy=(-camera.y+canvas.height/2)%g;
+  ctx.strokeStyle="#0e1927"; ctx.lineWidth=1;
+  for(let x=offx;x<canvas.width;x+=g){ ctx.beginPath(); ctx.moveTo(x,0); ctx.lineTo(x,canvas.height); ctx.stroke(); }
+  for(let y=offy;y<canvas.height;y+=g){ ctx.beginPath(); ctx.moveTo(0,y); ctx.lineTo(canvas.width,y); ctx.stroke(); }
+
+  if (!GAME.started){
+    ctx.fillStyle="#a4c6ff"; ctx.font="16px system-ui, sans-serif";
+    ctx.fillText("Load a map (maps.js) and press Start", 24, 40);
+    ctx.restore(); return;
+  }
+
+  const area = GAME.current.areas[GAME.areaIndex];
+
+  // zones
+  for(const z of area.zones){
+    const s = worldToScreen(z.x,z.y);
+    ctx.beginPath();
+    if (z.type==='safe'){ ctx.fillStyle="rgba(80,160,120,0.18)"; ctx.strokeStyle="#2b6b56"; }
+    else if (z.type==='active'){ ctx.fillStyle="rgba(80,120,200,0.12)"; ctx.strokeStyle="#274e8a"; }
+    else { ctx.fillStyle="rgba(64,100,140,0.12)"; ctx.strokeStyle="#2b4e70"; }
+    ctx.lineWidth=2; ctx.rect(s.x, s.y, z.w, z.h); ctx.fill(); ctx.stroke();
+    ctx.fillStyle="#a9c7ff"; ctx.font="11px monospace"; ctx.fillText(z.type, s.x+6, s.y+14);
+  }
+
+  // enemies + overlap HUD
+  let hit=false;
+  for(const e of GAME.enemies){ e.draw();
+    const p = PLAYER.body.GetPosition(); const px=p.x*pixelsPerTPU, py=p.y*pixelsPerTPU;
+    if (V.dist(e.pos, {x:px,y:py}) < e.r + PLAYER_R_PX) hit=true;
+  }
+  document.getElementById('hudEnemies').textContent = String(GAME.enemies.length);
+  document.getElementById('hit').style.display = hit ? 'inline' : 'none';
+
+  // player (solid + optional dashed ring)
+  const pp = PLAYER.body.GetPosition();
+  const ps = worldToScreen(pp.x*pixelsPerTPU, pp.y*pixelsPerTPU);
+
+  ctx.save();
+  ctx.globalAlpha = clamp(BALL_STYLE.opacity, 0, 1);
+  ctx.beginPath(); ctx.fillStyle = BALL_STYLE.color;
+  ctx.arc(ps.x, ps.y, PLAYER_R_PX, 0, Math.PI*2); ctx.fill();
+  ctx.restore();
+
+  if (BALL_STYLE.ring){
+    drawDashedRing(ps.x, ps.y, PLAYER_R_PX, 3);
+  }
+
+  // play bounds outline
+  const pb=area._playBounds, pbs=worldToScreen(pb.x,pb.y);
+  ctx.beginPath(); ctx.setLineDash([6,4]); ctx.strokeStyle="#2a3852"; ctx.lineWidth=2;
+  ctx.rect(pbs.x, pbs.y, pb.w, pb.h); ctx.stroke(); ctx.setLineDash([]);
+
+  ctx.restore();
+}
+</script>
+</body>
+</html>
