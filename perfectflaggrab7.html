@@ -1,0 +1,1056 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <title>Tagpro2 — Single Player (centered + stats + texture packs)</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <style>
+    :root { --bg:#222; --panel:#111; --muted:#aaa; --border:#333; }
+    html, body { height: 100%; }
+    body {
+      margin: 0; background: var(--bg); color: #eee; font-family: system-ui, Arial, sans-serif;
+      display:flex; flex-direction:column;
+    }
+
+    /* Layout: game horizontally centered */
+    #gameWrap {
+      flex:1 1 auto;
+      display:flex; align-items:center; justify-content:center;
+      position:relative; min-height: 0;
+      padding: 24px 0;
+    }
+    canvas { image-rendering: pixelated; }
+
+    /* Mini-score cards pinned left/right (outside canvas area) */
+    .miniScore {
+      position: fixed; top: 14px; z-index: 5;
+      background:#111; border:1px solid var(--border); border-radius:12px; padding:10px 14px;
+      width: 180px; box-shadow:0 10px 30px rgba(0,0,0,.4);
+    }
+    #miniRed { left: 14px; }
+    #miniBlue { right: 14px; }
+    .miniScore h4 { margin:0 0 8px; font-size:14px; color:#ddd; letter-spacing:.3px; }
+    .miniScore .big { font-weight:900; font-size:32px; line-height:1; }
+    #miniRed .big { color:#ff6a6a; }
+    #miniBlue .big { color:#6aa3ff; }
+
+    /* Pre-game overlay */
+    #overlay {
+      position: fixed; inset: 0; display:flex; align-items:center; justify-content:center;
+      background: rgba(0,0,0,.6); z-index: 10;
+    }
+    .panel {
+      background: var(--panel); border:1px solid var(--border); border-radius:12px;
+      padding: 16px 18px; width: min(92vw, 860px); box-shadow:0 10px 30px rgba(0,0,0,.5);
+    }
+    .grid2 { display:grid; grid-template-columns: 1fr 1fr; gap:16px; }
+    .row { display:flex; align-items:center; gap:12px; margin:10px 0; flex-wrap:wrap; }
+    .teams { display:flex; gap:16px; }
+    .teams label { display:flex; align-items:center; gap:8px; cursor:pointer; }
+    input[type="text"] { width:100%; background:#1b1b1b; color:#fff; border:1px solid var(--border); border-radius:8px; padding:10px; }
+    .btn { background:linear-gradient(#2e6,#0a4); color:#fff; border:none; padding:10px 16px; border-radius:10px; font-weight:700; cursor:pointer; letter-spacing:.3px; }
+    small.help { color: var(--muted); margin-left:auto; }
+
+    /* Texture pack chooser */
+    .tpGrid { display:grid; grid-template-columns: repeat(4, minmax(120px, 1fr)); gap:12px; }
+    .tpCard { background:#0e0e0e; border:1px solid var(--border); border-radius:10px; padding:8px; display:flex; gap:8px; align-items:center; }
+    .tpCard img { width:56px; height:56px; object-fit:cover; border-radius:8px; border:1px solid #222; background:#000; }
+    .tpCard .meta { display:flex; flex-direction:column; gap:4px; }
+    .tpCard strong { font-size:13px; }
+    .tpCard small { color:#bbb; font-size:12px; }
+    select { background:#1b1b1b; color:#fff; border:1px solid var(--border); border-radius:8px; padding:8px 10px; }
+
+    /* Big stats modal (toggle with Esc) */
+    #statsModal {
+      position: fixed; inset: 0; display:none; place-items:center; z-index: 9;
+      background: rgba(0,0,0,0.55);
+    }
+    #statsCard {
+      width: min(92vw, 820px);
+      background:#0f0f0f; border:1px solid var(--border); border-radius:14px; padding:14px 16px;
+      box-shadow:0 14px 40px rgba(0,0,0,.6);
+    }
+    #statsCard h3 { margin:0 0 12px; }
+    .statsGrid { display:grid; grid-template-columns: 1fr 1fr; gap:16px; }
+    .teamBox { background:#121212; border:1px solid #2c2c2c; border-radius:12px; padding:12px; }
+    .teamBox h4 { margin:0 0 8px; }
+    .statRow { display:flex; justify-content:space-between; margin:6px 0; }
+    .statRow .label { color:#bbb; }
+    .team-red h4 { color:#ff6a6a; }
+    .team-blue h4 { color:#6aa3ff; }
+  </style>
+  <script src="https://cdn.jsdelivr.net/gh/BambiTP/box2dcdn@main/Box2dWeb-2.1.a.3.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/pixi.js/8.6.6/pixi.min.js"></script>
+</head>
+<body>
+
+  <!-- Mini-score: Red (left) -->
+  <div id="miniRed" class="miniScore">
+    <h4>Red</h4>
+    <div class="big" id="miniRedScore">0</div>
+  </div>
+  <!-- Mini-score: Blue (right) -->
+  <div id="miniBlue" class="miniScore">
+    <h4>Blue</h4>
+    <div class="big" id="miniBlueScore">0</div>
+  </div>
+
+  <!-- Centered game mount -->
+  <div id="gameWrap"></div>
+
+  <!-- Big stats (Esc) -->
+  <div id="statsModal">
+    <div id="statsCard">
+      <h3>Scoreboard</h3>
+      <div class="statsGrid">
+        <div class="teamBox team-red">
+          <h4>Red</h4>
+          <div class="statRow"><span class="label">Score</span><span id="stat-red-score">0</span></div>
+          <div class="statRow"><span class="label">Grabs</span><span id="stat-red-grabs">0</span></div>
+          <div class="statRow"><span class="label">Hold Time</span><span id="stat-red-hold">00:00</span></div>
+          <div class="statRow"><span class="label">Drops</span><span id="stat-red-drops">0</span></div>
+          <div class="statRow"><span class="label">Returns (tags)</span><span id="stat-red-returns">0</span></div>
+        </div>
+        <div class="teamBox team-blue">
+          <h4>Blue</h4>
+          <div class="statRow"><span class="label">Score</span><span id="stat-blue-score">0</span></div>
+          <div class="statRow"><span class="label">Grabs</span><span id="stat-blue-grabs">0</span></div>
+          <div class="statRow"><span class="label">Hold Time</span><span id="stat-blue-hold">00:00</span></div>
+          <div class="statRow"><span class="label">Drops</span><span id="stat-blue-drops">0</span></div>
+          <div class="statRow"><span class="label">Returns (tags)</span><span id="stat-blue-returns">0</span></div>
+        </div>
+      </div>
+      <p style="color:#bbb; margin-top:10px;">Press <strong>Esc</strong> to close</p>
+    </div>
+  </div>
+
+  <!-- Pre-game setup UI -->
+  <div id="overlay">
+    <div class="panel">
+      <h2 style="margin:4px 0 12px;">Choose Team, Name & Texture Pack</h2>
+      <div class="grid2">
+        <div>
+          <div class="row">
+            <div class="teams">
+              <label><input type="radio" name="team" value="red" checked> <span style="color:#ff6a6a;font-weight:700;">Red</span></label>
+              <label><input type="radio" name="team" value="blue"> <span style="color:#6aa3ff;font-weight:700;">Blue</span></label>
+            </div>
+          </div>
+          <div class="row"><input id="playerName" type="text" placeholder="Enter your name (optional)"/></div>
+          <div class="row" style="justify-content:space-between;">
+            <small class="help">Controls: Arrow Keys or WASD · Esc for scoreboard</small>
+            <button id="startBtn" class="btn">Start</button>
+          </div>
+        </div>
+        <div>
+          <div class="row" style="margin-top:0"><strong>Texture Pack</strong></div>
+          <div id="tpRadios" class="tpGrid"></div>
+          <div class="row">
+            <label for="tpSelect" style="color:#ccc">Browse all:</label>
+            <select id="tpSelect" style="min-width:260px"></select>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+<script>
+/* =======================================================================================
+   Quality-of-life: prevent page scroll with arrows
+======================================================================================= */
+window.addEventListener('keydown', function(e){
+  if (['ArrowUp','ArrowDown','ArrowLeft','ArrowRight',' '].includes(e.key)) e.preventDefault();
+}, { passive:false });
+
+/* =======================================================================================
+   Texture Packs (0–55)
+======================================================================================= */
+const defaultTexturePackKeys = [ /* === long list from your message, intact === */
+{"id":0,"name":"Classic","texturePackUrls":{"tiles":"https://tagpro.koalabeast.com/textures/classic/tiles.png","speedpadred":"https://tagpro.koalabeast.com/textures/classic/speedpadred.png","speedpadblue":"https://tagpro.koalabeast.com/textures/classic/speedpadblue.png","portal":"https://tagpro.koalabeast.com/textures/classic/portal.png","portalred":"https://tagpro.koalabeast.com/textures/classic/portalred.png","portalblue":"https://tagpro.koalabeast.com/textures/classic/portalblue.png","splats":"https://tagpro.koalabeast.com/textures/classic/splats.png","gravitywell":"https://tagpro.koalabeast.com/textures/classic/gravitywell.png"}},
+{"id":1,"name":"Sniper Pack","texturePackUrls":{"tiles":"https://tagpro.koalabeast.com/textures/sniperpack/tiles.png","speedpadred":"https://tagpro.koalabeast.com/textures/sniperpack/speedpadred.png","speedpadblue":"https://tagpro.koalabeast.com/textures/sniperpack/speedpadblue.png","portal":"https://tagpro.koalabeast.com/textures/sniperpack/portal.png","portalred":"https://tagpro.koalabeast.com/textures/sniperpack/portalred.png","portalblue":"https://tagpro.koalabeast.com/textures/sniperpack/portalblue.png","splats":"https://tagpro.koalabeast.com/textures/sniperpack/splats.png","gravitywell":"https://tagpro.koalabeast.com/textures/sniperpack/gravitywell.png"}},
+{"id":2,"name":"Muscle's Cup Gradients","texturePackUrls":{"tiles":"https://tagpro.koalabeast.com/textures/musclescupgradients/tiles.png","speedpadred":"https://tagpro.koalabeast.com/textures/musclescupgradients/speedpadred.png","speedpadblue":"https://tagpro.koalabeast.com/textures/musclescupgradients/speedpadblue.png","portal":"https://tagpro.koalabeast.com/textures/musclescupgradients/portal.png","portalred":"https://tagpro.koalabeast.com/textures/musclescupgradients/portalred.png","portalblue":"https://tagpro.koalabeast.com/textures/musclescupgradients/portalblue.png","splats":"https://tagpro.koalabeast.com/textures/musclescupgradients/splats.png","gravitywell":"https://tagpro.koalabeast.com/textures/musclescupgradients/gravitywell.png"}},
+{"id":3,"name":"Coral Light","texturePackUrls":{"tiles":"https://tagpro.koalabeast.com/textures/corallight/tiles.png","speedpadred":"https://tagpro.koalabeast.com/textures/corallight/speedpadred.png","speedpadblue":"https://tagpro.koalabeast.com/textures/corallight/speedpadblue.png","portal":"https://tagpro.koalabeast.com/textures/corallight/portal.png","portalred":"https://tagpro.koalabeast.com/textures/corallight/portalred.png","portalblue":"https://tagpro.koalabeast.com/textures/corallight/portalblue.png","splats":"https://tagpro.koalabeast.com/textures/corallight/splats.png","gravitywell":"https://tagpro.koalabeast.com/textures/corallight/gravitywell.png"}},
+{"id":4,"name":"Muscle's Cup OG","texturePackUrls":{"tiles":"https://tagpro.koalabeast.com/textures/musclescupog/tiles.png","speedpadred":"https://tagpro.koalabeast.com/textures/musclescupog/speedpadred.png","speedpadblue":"https://tagpro.koalabeast.com/textures/musclescupog/speedpadblue.png","portal":"https://tagpro.koalabeast.com/textures/musclescupog/portal.png","portalred":"https://tagpro.koalabeast.com/textures/musclescupog/portalred.png","portalblue":"https://tagpro.koalabeast.com/textures/musclescupog/portalblue.png","splats":"https://tagpro.koalabeast.com/textures/musclescupog/splats.png","gravitywell":"https://tagpro.koalabeast.com/textures/musclescupog/gravitywell.png"}},
+{"id":5,"name":"Coral","texturePackUrls":{"tiles":"https://tagpro.koalabeast.com/textures/coral/tiles.png","speedpadred":"https://tagpro.koalabeast.com/textures/coral/speedpadred.png","speedpadblue":"https://tagpro.koalabeast.com/textures/coral/speedpadblue.png","portal":"https://tagpro.koalabeast.com/textures/coral/portal.png","portalred":"https://tagpro.koalabeast.com/textures/coral/portalred.png","portalblue":"https://tagpro.koalabeast.com/textures/coral/portalblue.png","splats":"https://tagpro.koalabeast.com/textures/coral/splats.png","gravitywell":"https://tagpro.koalabeast.com/textures/coral/gravitywell.png"}},
+{"id":6,"name":"MTBad","texturePackUrls":{"tiles":"https://tagpro.koalabeast.com/textures/mtbad/tiles.png","speedpadred":"https://tagpro.koalabeast.com/textures/mtbad/speedpadred.png","speedpadblue":"https://tagpro.koalabeast.com/textures/mtbad/speedpadblue.png","portal":"https://tagpro.koalabeast.com/textures/mtbad/portal.png","portalred":"https://tagpro.koalabeast.com/textures/mtbad/portalred.png","portalblue":"https://tagpro.koalabeast.com/textures/mtbad/portalblue.png","splats":"https://tagpro.koalabeast.com/textures/mtbad/splats.png","gravitywell":"https://tagpro.koalabeast.com/textures/mtbad/gravitywell.png"}},
+{"id":7,"name":"Flat","texturePackUrls":{"tiles":"https://tagpro.koalabeast.com/textures/flat/tiles.png","speedpadred":"https://tagpro.koalabeast.com/textures/flat/speedpadred.png","speedpadblue":"https://tagpro.koalabeast.com/textures/flat/speedpadblue.png","portal":"https://tagpro.koalabeast.com/textures/flat/portal.png","portalred":"https://tagpro.koalabeast.com/textures/flat/portalred.png","portalblue":"https://tagpro.koalabeast.com/textures/flat/portalblue.png","splats":"https://tagpro.koalabeast.com/textures/flat/splats.png","gravitywell":"https://tagpro.koalabeast.com/textures/flat/gravitywell.png"}},
+{"id":8,"name":"MLTP Live","texturePackUrls":{"tiles":"https://tagpro.koalabeast.com/textures/mltplive/tiles.png","speedpadred":"https://tagpro.koalabeast.com/textures/mltplive/speedpadred.png","speedpadblue":"https://tagpro.koalabeast.com/textures/mltplive/speedpadblue.png","portal":"https://tagpro.koalabeast.com/textures/mltplive/portal.png","portalred":"https://tagpro.koalabeast.com/textures/mltplive/portalred.png","portalblue":"https://tagpro.koalabeast.com/textures/mltplive/portalblue.png","splats":"https://tagpro.koalabeast.com/textures/mltplive/splats.png","gravitywell":"https://tagpro.koalabeast.com/textures/mltplive/gravitywell.png"}},
+{"id":9,"name":"24K","texturePackUrls":{"tiles":"https://tagpro.koalabeast.com/textures/k/tiles.png","speedpadred":"https://tagpro.koalabeast.com/textures/k/speedpadred.png","speedpadblue":"https://tagpro.koalabeast.com/textures/k/speedpadblue.png","portal":"https://tagpro.koalabeast.com/textures/k/portal.png","portalred":"https://tagpro.koalabeast.com/textures/k/portalred.png","portalblue":"https://tagpro.koalabeast.com/textures/k/portalblue.png","splats":"https://tagpro.koalabeast.com/textures/k/splats.png","gravitywell":"https://tagpro.koalabeast.com/textures/k/gravitywell.png"}},
+{"id":10,"name":"Precision Dark","texturePackUrls":{"tiles":"https://tagpro.koalabeast.com/textures/precisiondark/tiles.png","speedpadred":"https://tagpro.koalabeast.com/textures/precisiondark/speedpadred.png","speedpadblue":"https://tagpro.koalabeast.com/textures/precisiondark/speedpadblue.png","portal":"https://tagpro.koalabeast.com/textures/precisiondark/portal.png","portalred":"https://tagpro.koalabeast.com/textures/precisiondark/portalred.png","portalblue":"https://tagpro.koalabeast.com/textures/precisiondark/portalblue.png","splats":"https://tagpro.koalabeast.com/textures/precisiondark/splats.png","gravitywell":"https://tagpro.koalabeast.com/textures/precisiondark/gravitywell.png"}},
+{"id":11,"name":"Plumb","texturePackUrls":{"tiles":"https://tagpro.koalabeast.com/textures/plumb/tiles.png","speedpadred":"https://tagpro.koalabeast.com/textures/plumb/speedpadred.png","speedpadblue":"https://tagpro.koalabeast.com/textures/plumb/speedpadblue.png","portal":"https://tagpro.koalabeast.com/textures/plumb/portal.png","portalred":"https://tagpro.koalabeast.com/textures/plumb/portalred.png","portalblue":"https://tagpro.koalabeast.com/textures/plumb/portalblue.png","splats":"https://tagpro.koalabeast.com/textures/plumb/splats.png","gravitywell":"https://tagpro.koalabeast.com/textures/plumb/gravitywell.png"}},
+{"id":12,"name":"Plique","texturePackUrls":{"tiles":"https://tagpro.koalabeast.com/textures/plique/tiles.png","speedpadred":"https://tagpro.koalabeast.com/textures/plique/speedpadred.png","speedpadblue":"https://tagpro.koalabeast.com/textures/plique/speedpadblue.png","portal":"https://tagpro.koalabeast.com/textures/plique/portal.png","portalred":"https://tagpro.koalabeast.com/textures/plique/portalred.png","portalblue":"https://tagpro.koalabeast.com/textures/plique/portalblue.png","splats":"https://tagpro.koalabeast.com/textures/plique/splats.png","gravitywell":"https://tagpro.koalabeast.com/textures/plique/gravitywell.png"}},
+{"id":13,"name":"Isometric","texturePackUrls":{"tiles":"https://tagpro.koalabeast.com/textures/isometric/tiles.png","speedpadred":"https://tagpro.koalabeast.com/textures/isometric/speedpadred.png","speedpadblue":"https://tagpro.koalabeast.com/textures/isometric/speedpadblue.png","portal":"https://tagpro.koalabeast.com/textures/isometric/portal.png","portalred":"https://tagpro.koalabeast.com/textures/isometric/portalred.png","portalblue":"https://tagpro.koalabeast.com/textures/isometric/portalblue.png","splats":"https://tagpro.koalabeast.com/textures/isometric/splats.png","gravitywell":"https://tagpro.koalabeast.com/textures/isometric/gravitywell.png"}},
+{"id":14,"name":"Sparkle","texturePackUrls":{"tiles":"https://tagpro.koalabeast.com/textures/sparkle/tiles.png","speedpadred":"https://tagpro.koalabeast.com/textures/sparkle/speedpadred.png","speedpadblue":"https://tagpro.koalabeast.com/textures/sparkle/speedpadblue.png","portal":"https://tagpro.koalabeast.com/textures/sparkle/portal.png","portalred":"https://tagpro.koalabeast.com/textures/sparkle/portalred.png","portalblue":"https://tagpro.koalabeast.com/textures/sparkle/portalblue.png","splats":"https://tagpro.koalabeast.com/textures/sparkle/splats.png","gravitywell":"https://tagpro.koalabeast.com/textures/sparkle/gravitywell.png"}},
+{"id":15,"name":"CamsPP Dark","texturePackUrls":{"tiles":"https://tagpro.koalabeast.com/textures/camsppdark/tiles.png","speedpadred":"https://tagpro.koalabeast.com/textures/camsppdark/speedpadred.png","speedpadblue":"https://tagpro.koalabeast.com/textures/camsppdark/speedpadblue.png","portal":"https://tagpro.koalabeast.com/textures/camsppdark/portal.png","portalred":"https://tagpro.koalabeast.com/textures/camsppdark/portalred.png","portalblue":"https://tagpro.koalabeast.com/textures/camsppdark/portalblue.png","splats":"https://tagpro.koalabeast.com/textures/camsppdark/splats.png","gravitywell":"https://tagpro.koalabeast.com/textures/camsppdark/gravitywell.png"}},
+{"id":16,"name":"CamsPP Old","texturePackUrls":{"tiles":"https://tagpro.koalabeast.com/textures/camsppold/tiles.png","speedpadred":"https://tagpro.koalabeast.com/textures/camsppold/speedpadred.png","speedpadblue":"https://tagpro.koalabeast.com/textures/camsppold/speedpadblue.png","portal":"https://tagpro.koalabeast.com/textures/camsppold/portal.png","portalred":"https://tagpro.koalabeast.com/textures/camsppold/portalred.png","portalblue":"https://tagpro.koalabeast.com/textures/camsppold/portalblue.png","splats":"https://tagpro.koalabeast.com/textures/camsppold/splats.png","gravitywell":"https://tagpro.koalabeast.com/textures/camsppold/gravitywell.png"}},
+{"id":17,"name":"CMYK","texturePackUrls":{"tiles":"https://tagpro.koalabeast.com/textures/cmyk/tiles.png","speedpadred":"https://tagpro.koalabeast.com/textures/cmyk/speedpadred.png","speedpadblue":"https://tagpro.koalabeast.com/textures/cmyk/speedpadblue.png","portal":"https://tagpro.koalabeast.com/textures/cmyk/portal.png","portalred":"https://tagpro.koalabeast.com/textures/cmyk/portalred.png","portalblue":"https://tagpro.koalabeast.com/textures/cmyk/portalblue.png","splats":"https://tagpro.koalabeast.com/textures/cmyk/splats.png","gravitywell":"https://tagpro.koalabeast.com/textures/cmyk/gravitywell.png"}},
+{"id":18,"name":"CamsPP Light","texturePackUrls":{"tiles":"https://tagpro.koalabeast.com/textures/camspplight/tiles.png","speedpadred":"https://tagpro.koalabeast.com/textures/camspplight/speedpadred.png","speedpadblue":"https://tagpro.koalabeast.com/textures/camspplight/speedpadblue.png","portal":"https://tagpro.koalabeast.com/textures/camspplight/portal.png","portalred":"https://tagpro.koalabeast.com/textures/camspplight/portalred.png","portalblue":"https://tagpro.koalabeast.com/textures/camspplight/portalblue.png","splats":"https://tagpro.koalabeast.com/textures/camspplight/splats.png","gravitywell":"https://tagpro.koalabeast.com/textures/camspplight/gravitywell.png"}},
+{"id":19,"name":"Electric","texturePackUrls":{"tiles":"https://tagpro.koalabeast.com/textures/electric/tiles.png","speedpadred":"https://tagpro.koalabeast.com/textures/electric/speedpadred.png","speedpadblue":"https://tagpro.koalabeast.com/textures/electric/speedpadblue.png","portal":"https://tagpro.koalabeast.com/textures/electric/portal.png","portalred":"https://tagpro.koalabeast.com/textures/electric/portalred.png","portalblue":"https://tagpro.koalabeast.com/textures/electric/portalblue.png","splats":"https://tagpro.koalabeast.com/textures/electric/splats.png","gravitywell":"https://tagpro.koalabeast.com/textures/electric/gravitywell.png"}},
+{"id":20,"name":"Sketch+","texturePackUrls":{"tiles":"https://tagpro.koalabeast.com/textures/sketch/tiles.png","speedpadred":"https://tagpro.koalabeast.com/textures/sketch/speedpadred.png","speedpadblue":"https://tagpro.koalabeast.com/textures/sketch/speedpadblue.png","portal":"https://tagpro.koalabeast.com/textures/sketch/portal.png","portalred":"https://tagpro.koalabeast.com/textures/sketch/portalred.png","portalblue":"https://tagpro.koalabeast.com/textures/sketch/portalblue.png","splats":"https://tagpro.koalabeast.com/textures/sketch/splats.png","gravitywell":"https://tagpro.koalabeast.com/textures/sketch/gravitywell.png"}},
+{"id":21,"name":"Sharp","texturePackUrls":{"tiles":"https://tagpro.koalabeast.com/textures/sharp/tiles.png","speedpadred":"https://tagpro.koalabeast.com/textures/sharp/speedpadred.png","speedpadblue":"https://tagpro.koalabeast.com/textures/sharp/speedpadblue.png","portal":"https://tagpro.koalabeast.com/textures/sharp/portal.png","portalred":"https://tagpro.koalabeast.com/textures/sharp/portalred.png","portalblue":"https://tagpro.koalabeast.com/textures/sharp/portalblue.png","splats":"https://tagpro.koalabeast.com/textures/sharp/splats.png","gravitywell":"https://tagpro.koalabeast.com/textures/sharp/gravitywell.png"}},
+{"id":22,"name":"PastelPro","texturePackUrls":{"tiles":"https://tagpro.koalabeast.com/textures/pastelpro/tiles.png","speedpadred":"https://tagpro.koalabeast.com/textures/pastelpro/speedpadred.png","speedpadblue":"https://tagpro.koalabeast.com/textures/pastelpro/speedpadblue.png","portal":"https://tagpro.koalabeast.com/textures/pastelpro/portal.png","portalred":"https://tagpro.koalabeast.com/textures/pastelpro/portalred.png","portalblue":"https://tagpro.koalabeast.com/textures/pastelpro/portalblue.png","splats":"https://tagpro.koalabeast.com/textures/pastelpro/splats.png","gravitywell":"https://tagpro.koalabeast.com/textures/pastelpro/gravitywell.png"}},
+{"id":23,"name":"Element+","texturePackUrls":{"tiles":"https://tagpro.koalabeast.com/textures/element/tiles.png","speedpadred":"https://tagpro.koalabeast.com/textures/element/speedpadred.png","speedpadblue":"https://tagpro.koalabeast.com/textures/element/speedpadblue.png","portal":"https://tagpro.koalabeast.com/textures/element/portal.png","portalred":"https://tagpro.koalabeast.com/textures/element/portalred.png","portalblue":"https://tagpro.koalabeast.com/textures/element/portalblue.png","splats":"https://tagpro.koalabeast.com/textures/element/splats.png","gravitywell":"https://tagpro.koalabeast.com/textures/element/gravitywell.png"}},
+{"id":24,"name":"Mural","texturePackUrls":{"tiles":"https://tagpro.koalabeast.com/textures/mural/tiles.png","speedpadred":"https://tagpro.koalabeast.com/textures/mural/speedpadred.png","speedpadblue":"https://tagpro.koalabeast.com/textures/mural/speedpadblue.png","portal":"https://tagpro.koalabeast.com/textures/mural/portal.png","portalred":"https://tagpro.koalabeast.com/textures/mural/portalred.png","portalblue":"https://tagpro.koalabeast.com/textures/mural/portalblue.png","splats":"https://tagpro.koalabeast.com/textures/mural/splats.png","gravitywell":"https://tagpro.koalabeast.com/textures/mural/gravitywell.png"}},
+{"id":25,"name":"Supreme","texturePackUrls":{"tiles":"https://tagpro.koalabeast.com/textures/supreme/tiles.png","speedpadred":"https://tagpro.koalabeast.com/textures/supreme/speedpadred.png","speedpadblue":"https://tagpro.koalabeast.com/textures/supreme/speedpadblue.png","portal":"https://tagpro.koalabeast.com/textures/supreme/portal.png","portalred":"https://tagpro.koalabeast.com/textures/supreme/portalred.png","portalblue":"https://tagpro.koalabeast.com/textures/supreme/portalblue.png","splats":"https://tagpro.koalabeast.com/textures/supreme/splats.png","gravitywell":"https://tagpro.koalabeast.com/textures/supreme/gravitywell.png"}},
+{"id":26,"name":"Circlejerk","texturePackUrls":{"tiles":"https://tagpro.koalabeast.com/textures/circlejerk/tiles.png","speedpadred":"https://tagpro.koalabeast.com/textures/circlejerk/speedpadred.png","speedpadblue":"https://tagpro.koalabeast.com/textures/circlejerk/speedpadblue.png","portal":"https://tagpro.koalabeast.com/textures/circlejerk/portal.png","portalred":"https://tagpro.koalabeast.com/textures/circlejerk/portalred.png","portalblue":"https://tagpro.koalabeast.com/textures/circlejerk/portalblue.png","splats":"https://tagpro.koalabeast.com/textures/circlejerk/splats.png","gravitywell":"https://tagpro.koalabeast.com/textures/circlejerk/gravitywell.png"}},
+{"id":27,"name":"nom","texturePackUrls":{"tiles":"https://tagpro.koalabeast.com/textures/nom/tiles.png","speedpadred":"https://tagpro.koalabeast.com/textures/nom/speedpadred.png","speedpadblue":"https://tagpro.koalabeast.com/textures/nom/speedpadblue.png","portal":"https://tagpro.koalabeast.com/textures/nom/portal.png","portalred":"https://tagpro.koalabeast.com/textures/nom/portalred.png","portalblue":"https://tagpro.koalabeast.com/textures/nom/portalblue.png","splats":"https://tagpro.koalabeast.com/textures/nom/splats.png","gravitywell":"https://tagpro.koalabeast.com/textures/nom/gravitywell.png"}},
+{"id":28,"name":"Starlight","texturePackUrls":{"tiles":"https://tagpro.koalabeast.com/textures/starlight/tiles.png","speedpadred":"https://tagpro.koalabeast.com/textures/starlight/speedpadred.png","speedpadblue":"https://tagpro.koalabeast.com/textures/starlight/speedpadblue.png","portal":"https://tagpro.koalabeast.com/textures/starlight/portal.png","portalred":"https://tagpro.koalabeast.com/textures/starlight/portalred.png","portalblue":"https://tagpro.koalabeast.com/textures/starlight/portalblue.png","splats":"https://tagpro.koalabeast.com/textures/starlight/splats.png","gravitywell":"https://tagpro.koalabeast.com/textures/starlight/gravitywell.png"}},
+{"id":29,"name":"TerminalPX","texturePackUrls":{"tiles":"https://tagpro.koalabeast.com/textures/terminalpx/tiles.png","speedpadred":"https://tagpro.koalabeast.com/textures/terminalpx/speedpadred.png","speedpadblue":"https://tagpro.koalabeast.com/textures/terminalpx/speedpadblue.png","portal":"https://tagpro.koalabeast.com/textures/terminalpx/portal.png","portalred":"https://tagpro.koalabeast.com/textures/terminalpx/portalred.png","portalblue":"https://tagpro.koalabeast.com/textures/terminalpx/portalblue.png","splats":"https://tagpro.koalabeast.com/textures/terminalpx/splats.png","gravitywell":"https://tagpro.koalabeast.com/textures/terminalpx/gravitywell.png"}},
+{"id":30,"name":"Brioche Light","texturePackUrls":{"tiles":"https://tagpro.koalabeast.com/textures/briochelight/tiles.png","speedpadred":"https://tagpro.koalabeast.com/textures/briochelight/speedpadred.png","speedpadblue":"https://tagpro.koalabeast.com/textures/briochelight/speedpadblue.png","portal":"https://tagpro.koalabeast.com/textures/briochelight/portal.png","portalred":"https://tagpro.koalabeast.com/textures/briochelight/portalred.png","portalblue":"https://tagpro.koalabeast.com/textures/briochelight/portalblue.png","splats":"https://tagpro.koalabeast.com/textures/briochelight/splats.png","gravitywell":"https://tagpro.koalabeast.com/textures/briochelight/gravitywell.png"}},
+{"id":31,"name":"Crystal","texturePackUrls":{"tiles":"https://tagpro.koalabeast.com/textures/crystal/tiles.png","speedpadred":"https://tagpro.koalabeast.com/textures/crystal/speedpadred.png","speedpadblue":"https://tagpro.koalabeast.com/textures/crystal/speedpadblue.png","portal":"https://tagpro.koalabeast.com/textures/crystal/portal.png","portalred":"https://tagpro.koalabeast.com/textures/crystal/portalred.png","portalblue":"https://tagpro.koalabeast.com/textures/crystal/portalblue.png","splats":"https://tagpro.koalabeast.com/textures/crystal/splats.png","gravitywell":"https://tagpro.koalabeast.com/textures/crystal/gravitywell.png"}},
+{"id":32,"name":"Bold","texturePackUrls":{"tiles":"https://tagpro.koalabeast.com/textures/bold/tiles.png","speedpadred":"https://tagpro.koalabeast.com/textures/bold/speedpadred.png","speedpadblue":"https://tagpro.koalabeast.com/textures/bold/speedpadblue.png","portal":"https://tagpro.koalabeast.com/textures/bold/portal.png","portalred":"https://tagpro.koalabeast.com/textures/bold/portalred.png","portalblue":"https://tagpro.koalabeast.com/textures/bold/portalblue.png","splats":"https://tagpro.koalabeast.com/textures/bold/splats.png","gravitywell":"https://tagpro.koalabeast.com/textures/bold/gravitywell.png"}},
+{"id":33,"name":"Turbo","texturePackUrls":{"tiles":"https://tagpro.koalabeast.com/textures/turbo/tiles.png","speedpadred":"https://tagpro.koalabeast.com/textures/turbo/speedpadred.png","speedpadblue":"https://tagpro.koalabeast.com/textures/turbo/speedpadblue.png","portal":"https://tagpro.koalabeast.com/textures/turbo/portal.png","portalred":"https://tagpro.koalabeast.com/textures/turbo/portalred.png","portalblue":"https://tagpro.koalabeast.com/textures/turbo/portalblue.png","splats":"https://tagpro.koalabeast.com/textures/turbo/splats.png","gravitywell":"https://tagpro.koalabeast.com/textures/turbo/gravitywell.png"}},
+{"id":34,"name":"Granata","texturePackUrls":{"tiles":"https://tagpro.koalabeast.com/textures/granata/tiles.png","speedpadred":"https://tagpro.koalabeast.com/textures/granata/speedpadred.png","speedpadblue":"https://tagpro.koalabeast.com/textures/granata/speedpadblue.png","portal":"https://tagpro.koalabeast.com/textures/granata/portal.png","portalred":"https://tagpro.koalabeast.com/textures/granata/portalred.png","portalblue":"https://tagpro.koalabeast.com/textures/granata/portalblue.png","splats":"https://tagpro.koalabeast.com/textures/granata/splats.png","gravitywell":"https://tagpro.koalabeast.com/textures/granata/gravitywell.png"}},
+{"id":35,"name":"Celeste","texturePackUrls":{"tiles":"https://tagpro.koalabeast.com/textures/celeste/tiles.png","speedpadred":"https://tagpro.koalabeast.com/textures/celeste/speedpadred.png","speedpadblue":"https://tagpro.koalabeast.com/textures/celeste/speedpadblue.png","portal":"https://tagpro.koalabeast.com/textures/celeste/portal.png","portalred":"https://tagpro.koalabeast.com/textures/celeste/portalred.png","portalblue":"https://tagpro.koalabeast.com/textures/celeste/portalblue.png","splats":"https://tagpro.koalabeast.com/textures/celeste/splats.png","gravitywell":"https://tagpro.koalabeast.com/textures/celeste/gravitywell.png"}},
+{"id":36,"name":"Brioche Deluxe","texturePackUrls":{"tiles":"https://tagpro.koalabeast.com/textures/briochedeluxe/tiles.png","speedpadred":"https://tagpro.koalabeast.com/textures/briochedeluxe/speedpadred.png","speedpadblue":"https://tagpro.koalabeast.com/textures/briochedeluxe/speedpadblue.png","portal":"https://tagpro.koalabeast.com/textures/briochedeluxe/portal.png","portalred":"https://tagpro.koalabeast.com/textures/briochedeluxe/portalred.png","portalblue":"https://tagpro.koalabeast.com/textures/briochedeluxe/portalblue.png","splats":"https://tagpro.koalabeast.com/textures/briochedeluxe/splats.png","gravitywell":"https://tagpro.koalabeast.com/textures/briochedeluxe/gravitywell.png"}},
+{"id":37,"name":"Brioche Extra Light","texturePackUrls":{"tiles":"https://tagpro.koalabeast.com/textures/briocheextralight/tiles.png","speedpadred":"https://tagpro.koalabeast.com/textures/briocheextralight/speedpadred.png","speedpadblue":"https://tagpro.koalabeast.com/textures/briocheextralight/speedpadblue.png","portal":"https://tagpro.koalabeast.com/textures/briocheextralight/portal.png","portalred":"https://tagpro.koalabeast.com/textures/briocheextralight/portalred.png","portalblue":"https://tagpro.koalabeast.com/textures/briocheextralight/portalblue.png","splats":"https://tagpro.koalabeast.com/textures/briocheextralight/splats.png","gravitywell":"https://tagpro.koalabeast.com/textures/briocheextralight/gravitywell.png"}},
+{"id":38,"name":"TagPro Next Classic","texturePackUrls":{"tiles":"https://tagpro.koalabeast.com/textures/tagpronextclassic/tiles.png","speedpadred":"https://tagpro.koalabeast.com/textures/tagpronextclassic/speedpadred.png","speedpadblue":"https://tagpro.koalabeast.com/textures/tagpronextclassic/speedpadblue.png","portal":"https://tagpro.koalabeast.com/textures/tagpronextclassic/portal.png","portalred":"https://tagpro.koalabeast.com/textures/tagpronextclassic/portalred.png","portalblue":"https://tagpro.koalabeast.com/textures/tagpronextclassic/portalblue.png","splats":"https://tagpro.koalabeast.com/textures/tagpronextclassic/splats.png","gravitywell":"https://tagpro.koalabeast.com/textures/tagpronextclassic/gravitywell.png"}},
+{"id":39,"name":"Flat (Bug)","texturePackUrls":{"tiles":"https://tagpro.koalabeast.com/textures/flatbug/tiles.png","speedpadred":"https://tagpro.koalabeast.com/textures/flatbug/speedpadred.png","speedpadblue":"https://tagpro.koalabeast.com/textures/flatbug/speedpadblue.png","portal":"https://tagpro.koalabeast.com/textures/flatbug/portal.png","portalred":"https://tagpro.koalabeast.com/textures/flatbug/portalred.png","portalblue":"https://tagpro.koalabeast.com/textures/flatbug/portalblue.png","splats":"https://tagpro.koalabeast.com/textures/flatbug/splats.png","gravitywell":"https://tagpro.koalabeast.com/textures/flatbug/gravitywell.png"}},
+{"id":40,"name":"Maxima","texturePackUrls":{"tiles":"https://tagpro.koalabeast.com/textures/maxima/tiles.png","speedpadred":"https://tagpro.koalabeast.com/textures/maxima/speedpadred.png","speedpadblue":"https://tagpro.koalabeast.com/textures/maxima/speedpadblue.png","portal":"https://tagpro.koalabeast.com/textures/maxima/portal.png","portalred":"https://tagpro.koalabeast.com/textures/maxima/portalred.png","portalblue":"https://tagpro.koalabeast.com/textures/maxima/portalblue.png","splats":"https://tagpro.koalabeast.com/textures/maxima/splats.png","gravitywell":"https://tagpro.koalabeast.com/textures/maxima/gravitywell.png"}},
+{"id":41,"name":"Jello","texturePackUrls":{"tiles":"https://tagpro.koalabeast.com/textures/jello/tiles.png","speedpadred":"https://tagpro.koalabeast.com/textures/jello/speedpadred.png","speedpadblue":"https://tagpro.koalabeast.com/textures/jello/speedpadblue.png","portal":"https://tagpro.koalabeast.com/textures/jello/portal.png","portalred":"https://tagpro.koalabeast.com/textures/jello/portalred.png","portalblue":"https://tagpro.koalabeast.com/textures/jello/portalblue.png","splats":"https://tagpro.koalabeast.com/textures/jello/splats.png","gravitywell":"https://tagpro.koalabeast.com/textures/jello/gravitywell.png"}},
+{"id":42,"name":"Chip","texturePackUrls":{"tiles":"https://tagpro.koalabeast.com/textures/chip/tiles.png","speedpadred":"https://tagpro.koalabeast.com/textures/chip/speedpadred.png","speedpadblue":"https://tagpro.koalabeast.com/textures/chip/speedpadblue.png","portal":"https://tagpro.koalabeast.com/textures/chip/portal.png","portalred":"https://tagpro.koalabeast.com/textures/chip/portalred.png","portalblue":"https://tagpro.koalabeast.com/textures/chip/portalblue.png","splats":"https://tagpro.koalabeast.com/textures/chip/splats.png","gravitywell":"https://tagpro.koalabeast.com/textures/chip/gravitywell.png"}},
+{"id":43,"name":"Wave","texturePackUrls":{"tiles":"https://tagpro.koalabeast.com/textures/wave/tiles.png","speedpadred":"https://tagpro.koalabeast.com/textures/wave/speedpadred.png","speedpadblue":"https://tagpro.koalabeast.com/textures/wave/speedpadblue.png","portal":"https://tagpro.koalabeast.com/textures/wave/portal.png","portalred":"https://tagpro.koalabeast.com/textures/wave/portalred.png","portalblue":"https://tagpro.koalabeast.com/textures/wave/portalblue.png","splats":"https://tagpro.koalabeast.com/textures/wave/splats.png","gravitywell":"https://tagpro.koalabeast.com/textures/wave/gravitywell.png"}},
+{"id":44,"name":"Mumbo","texturePackUrls":{"tiles":"https://tagpro.koalabeast.com/textures/mumbo/tiles.png","speedpadred":"https://tagpro.koalabeast.com/textures/mumbo/speedpadred.png","speedpadblue":"https://tagpro.koalabeast.com/textures/mumbo/speedpadblue.png","portal":"https://tagpro.koalabeast.com/textures/mumbo/portal.png","portalred":"https://tagpro.koalabeast.com/textures/mumbo/portalred.png","portalblue":"https://tagpro.koalabeast.com/textures/mumbo/portalblue.png","splats":"https://tagpro.koalabeast.com/textures/mumbo/splats.png","gravitywell":"https://tagpro.koalabeast.com/textures/mumbo/gravitywell.png"}},
+{"id":45,"name":"Funko","texturePackUrls":{"tiles":"https://tagpro.koalabeast.com/textures/funko/tiles.png","speedpadred":"https://tagpro.koalabeast.com/textures/funko/speedpadred.png","speedpadblue":"https://tagpro.koalabeast.com/textures/funko/speedpadblue.png","portal":"https://tagpro.koalabeast.com/textures/funko/portal.png","portalred":"https://tagpro.koalabeast.com/textures/funko/portalred.png","portalblue":"https://tagpro.koalabeast.com/textures/funko/portalblue.png","splats":"https://tagpro.koalabeast.com/textures/funko/splats.png","gravitywell":"https://tagpro.koalabeast.com/textures/funko/gravitywell.png"}},
+{"id":46,"name":"Ancient Gems","texturePackUrls":{"tiles":"https://tagpro.koalabeast.com/textures/ancientgems/tiles.png","speedpadred":"https://tagpro.koalabeast.com/textures/ancientgems/speedpadred.png","speedpadblue":"https://tagpro.koalabeast.com/textures/ancientgems/speedpadblue.png","portal":"https://tagpro.koalabeast.com/textures/ancientgems/portal.png","portalred":"https://tagpro.koalabeast.com/textures/ancientgems/portalred.png","portalblue":"https://tagpro.koalabeast.com/textures/ancientgems/portalblue.png","splats":"https://tagpro.koalabeast.com/textures/ancientgems/splats.png","gravitywell":"https://tagpro.koalabeast.com/textures/ancientgems/gravitywell.png"}},
+{"id":47,"name":"Yin & Yang","texturePackUrls":{"tiles":"https://tagpro.koalabeast.com/textures/yinyang/tiles.png","speedpadred":"https://tagpro.koalabeast.com/textures/yinyang/speedpadred.png","speedpadblue":"https://tagpro.koalabeast.com/textures/yinyang/speedpadblue.png","portal":"https://tagpro.koalabeast.com/textures/yinyang/portal.png","portalred":"https://tagpro.koalabeast.com/textures/yinyang/portalred.png","portalblue":"https://tagpro.koalabeast.com/textures/yinyang/portalblue.png","splats":"https://tagpro.koalabeast.com/textures/yinyang/splats.png","gravitywell":"https://tagpro.koalabeast.com/textures/yinyang/gravitywell.png"}},
+{"id":48,"name":"Spongepack","texturePackUrls":{"tiles":"https://tagpro.koalabeast.com/textures/spongepack/tiles.png","speedpadred":"https://tagpro.koalabeast.com/textures/spongepack/speedpadred.png","speedpadblue":"https://tagpro.koalabeast.com/textures/spongepack/speedpadblue.png","portal":"https://tagpro.koalabeast.com/textures/spongepack/portal.png","portalred":"https://tagpro.koalabeast.com/textures/spongepack/portalred.png","portalblue":"https://tagpro.koalabeast.com/textures/spongepack/portalblue.png","splats":"https://tagpro.koalabeast.com/textures/spongepack/splats.png","gravitywell":"https://tagpro.koalabeast.com/textures/spongepack/gravitywell.png"}},
+{"id":49,"name":"Xmas","texturePackUrls":{"tiles":"https://tagpro.koalabeast.com/textures/xmas/tiles.png","speedpadred":"https://tagpro.koalabeast.com/textures/xmas/speedpadred.png","speedpadblue":"https://tagpro.koalabeast.com/textures/xmas/speedpadblue.png","portal":"https://tagpro.koalabeast.com/textures/xmas/portal.png","portalred":"https://tagpro.koalabeast.com/textures/xmas/portalred.png","portalblue":"https://tagpro.koalabeast.com/textures/xmas/portalblue.png","splats":"https://tagpro.koalabeast.com/textures/xmas/splats.png","gravitywell":"https://tagpro.koalabeast.com/textures/xmas/gravitywell.png"}},
+{"id":50,"name":"Afloat","texturePackUrls":{"tiles":"https://tagpro.koalabeast.com/textures/afloat/tiles.png","speedpadred":"https://tagpro.koalabeast.com/textures/afloat/speedpadred.png","speedpadblue":"https://tagpro.koalabeast.com/textures/afloat/speedpadblue.png","portal":"https://tagpro.koalabeast.com/textures/afloat/portal.png","portalred":"https://tagpro.koalabeast.com/textures/afloat/portalred.png","portalblue":"https://tagpro.koalabeast.com/textures/afloat/portalblue.png","splats":"https://tagpro.koalabeast.com/textures/afloat/splats.png","gravitywell":"https://tagpro.koalabeast.com/textures/afloat/gravitywell.png"}},
+{"id":51,"name":"Twine","texturePackUrls":{"tiles":"https://tagpro.koalabeast.com/textures/twine/tiles.png","speedpadred":"https://tagpro.koalabeast.com/textures/twine/speedpadred.png","speedpadblue":"https://tagpro.koalabeast.com/textures/twine/speedpadblue.png","portal":"https://tagpro.koalabeast.com/textures/twine/portal.png","portalred":"https://tagpro.koalabeast.com/textures/twine/portalred.png","portalblue":"https://tagpro.koalabeast.com/textures/twine/portalblue.png","splats":"https://tagpro.koalabeast.com/textures/twine/splats.png","gravitywell":"https://tagpro.koalabeast.com/textures/twine/gravitywell.png"}},
+{"id":52,"name":"Bowling","texturePackUrls":{"tiles":"https://tagpro.koalabeast.com/textures/bowling/tiles.png","speedpadred":"https://tagpro.koalabeast.com/textures/bowling/speedpadred.png","speedpadblue":"https://tagpro.koalabeast.com/textures/bowling/speedpadblue.png","portal":"https://tagpro.koalabeast.com/textures/bowling/portal.png","portalred":"https://tagpro.koalabeast.com/textures/bowling/portalred.png","portalblue":"https://tagpro.koalabeast.com/textures/bowling/portalblue.png","splats":"https://tagpro.koalabeast.com/textures/bowling/splats.png","gravitywell":"https://tagpro.koalabeast.com/textures/bowling/gravitywell.png"}},
+{"id":53,"name":"Supreme Shine","texturePackUrls":{"tiles":"https://tagpro.koalabeast.com/textures/supremeshine/tiles.png","speedpadred":"https://tagpro.koalabeast.com/textures/supremeshine/speedpadred.png","speedpadblue":"https://tagpro.koalabeast.com/textures/supremeshine/speedpadblue.png","portal":"https://tagpro.koalabeast.com/textures/supremeshine/portal.png","portalred":"https://tagpro.koalabeast.com/textures/supremeshine/portalred.png","portalblue":"https://tagpro.koalabeast.com/textures/supremeshine/portalblue.png","splats":"https://tagpro.koalabeast.com/textures/supremeshine/splats.png","gravitywell":"https://tagpro.koalabeast.com/textures/supremeshine/gravitywell.png"}},
+{"id":54,"name":"Softpaint","texturePackUrls":{"tiles":"https://tagpro.koalabeast.com/textures/softpaint/tiles.png","speedpadred":"https://tagpro.koalabeast.com/textures/softpaint/speedpadred.png","speedpadblue":"https://tagpro.koalabeast.com/textures/softpaint/speedpadblue.png","portal":"https://tagpro.koalabeast.com/textures/softpaint/portal.png","portalred":"https://tagpro.koalabeast.com/textures/softpaint/portalred.png","portalblue":"https://tagpro.koalabeast.com/textures/softpaint/portalblue.png","splats":"https://tagpro.koalabeast.com/textures/softpaint/splats.png","gravitywell":"https://tagpro.koalabeast.com/textures/softpaint/gravitywell.png"}},
+{"id":55,"name":"Return","texturePackUrls":{"tiles":"https://tagpro.koalabeast.com/textures/return/tiles.png","speedpadred":"https://tagpro.koalabeast.com/textures/return/speedpadred.png","speedpadblue":"https://tagpro.koalabeast.com/textures/return/speedpadblue.png","portal":"https://tagpro.koalabeast.com/textures/return/portal.png","portalred":"https://tagpro.koalabeast.com/textures/return/portalred.png","portalblue":"https://tagpro.koalabeast.com/textures/return/portalblue.png","splats":"https://tagpro.koalabeast.com/textures/return/splats.png","gravitywell":"https://tagpro.koalabeast.com/textures/return/gravitywell.png"}}
+];
+
+let selectedPackId = 2; // default radio pick
+
+function renderTexturePackUI() {
+  const picks = [0,2,3,38]; // 4 radio options
+  const radiosEl = document.getElementById('tpRadios');
+  const selectEl = document.getElementById('tpSelect');
+  radiosEl.innerHTML = '';
+  // Radio cards
+  for (const id of picks) {
+    const p = defaultTexturePackKeys.find(t => t.id === id);
+    const card = document.createElement('label');
+    card.className = 'tpCard';
+    card.innerHTML = `
+      <input type="radio" name="tp" value="${p.id}" ${p.id===selectedPackId?'checked':''}>
+      <img src="${p.texturePackUrls.tiles}" alt="${p.name}">
+      <div class="meta"><strong>${p.name}</strong><small>#${p.id}</small></div>
+    `;
+    radiosEl.appendChild(card);
+  }
+  // Full dropdown
+  selectEl.innerHTML = defaultTexturePackKeys.map(p => `<option value="${p.id}" ${p.id===selectedPackId?'selected':''}>${p.id.toString().padStart(2,'0')} — ${p.name}</option>`).join('');
+
+  // Wire up sync
+  radiosEl.addEventListener('change', (e)=>{
+    if (e.target && e.target.name==='tp') {
+      selectedPackId = parseInt(e.target.value,10);
+      selectEl.value = String(selectedPackId);
+    }
+  });
+  selectEl.addEventListener('change', (e)=>{
+    selectedPackId = parseInt(e.target.value,10);
+    // if it's one of the 4, flip radio; else no radio is checked
+    const radios = radiosEl.querySelectorAll('input[name="tp"]');
+    radios.forEach(r => r.checked = (parseInt(r.value,10)===selectedPackId));
+  });
+}
+renderTexturePackUI();
+
+/* =======================================================================================
+   Core constants & helpers
+======================================================================================= */
+const DEFAULT_MAP_ID = 93134;
+const CORS = "https://cors.bambitp.workers.dev/?url=";
+
+const pixelsPerTPU   = 100;
+const gridSizePixels = 40;
+const gridSizeTPU    = gridSizePixels / pixelsPerTPU;
+const timestep       = 1/60;
+
+const playerProps = {
+  radius: 0.19, density: 1, friction: 0.5, restitution: 0.2,
+  linearDamping: 0.5, angularDamping: 0.5, accel: 0.03, topSpeed: 3.0, maxSpeed: 4.0,
+};
+
+const FLAG_HOVER_MULT = 0.46;
+const FLAG_EXTRA_PX   = 3;
+const RESPAWN_DELAY_SEC = 0;
+
+function tpuToPx(v){ return v * pixelsPerTPU }
+function pxToTpu(v){ return v / pixelsPerTPU }
+function randRange(a,b){ return a + Math.random()*(b-a); }
+function randInt(a,b){ return Math.floor(a + Math.random()*(b-a+1)); }
+function rgbHex(r,g,b){ return ((1<<24)+(r<<16)+(g<<8)+b).toString(16).slice(1) }
+function loadJson(url){ return fetch(url).then(r=>{ if(!r.ok) throw new Error(`HTTP ${r.status}`); return r.json(); }); }
+function mmss(ms){ const tot = Math.floor(ms/1000); const m = Math.floor(tot/60), s=tot%60; return `${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`; }
+
+/* =======================================================================================
+   PIXI scaffolding
+======================================================================================= */
+let app, background, midground, foreground;
+const frameCache = {};
+const sheetCache = {};
+function mountPixi() {
+  app = new PIXI.Application();
+  return app.init({ width: 1280, height: 800, backgroundAlpha: 0 }).then(()=>{
+    const wrap = document.getElementById('gameWrap');
+    wrap.innerHTML = '';
+    wrap.appendChild(app.canvas);
+    background = new PIXI.Container();
+    midground  = new PIXI.Container();
+    foreground = new PIXI.Container();
+    app.stage.addChild(background, midground, foreground);
+  });
+}
+
+/* =======================================================================================
+   Dynamic sheet URL mapping from texture pack
+======================================================================================= */
+function urlsForPack(packId){
+  const p = defaultTexturePackKeys.find(x=>x.id===packId) || defaultTexturePackKeys[0];
+  const u = p.texturePackUrls;
+  // Fallback for neutral speedpad: use red or blue if neutral missing
+  const boostNeutral = u.speedpadblue || u.speedpadred || u.tiles;
+  return {
+    tiles:      u.tiles,
+    boost:      boostNeutral,
+    redboost:   u.speedpadred,
+    blueboost:  u.speedpadblue,
+    portal:     u.portal,
+    redportal:  u.portalred,
+    blueportal: u.portalblue
+  };
+}
+let sheetUrls = urlsForPack(selectedPackId);
+
+async function cacheSheets(){
+  // Build unique set of images to fetch based on current sheetUrls + tileData
+  const needed = new Set(tileData.map(t => sheetUrls[t.image]).filter(Boolean));
+  for(const url of needed){
+    if(sheetCache[url]) continue;
+    const img = new Image(); img.crossOrigin='anonymous';
+    await new Promise((res,rej)=>{ img.onload=res; img.onerror=rej; img.src=url; });
+    const source = new PIXI.ImageSource({ resource: img });
+    sheetCache[url] = { img, source };
+  }
+  // Slice frames
+  for(const {id,x,y,image} of tileData){
+    if(x==null || y==null) continue;
+    const url = sheetUrls[image]; if(!url || !sheetCache[url]) continue;
+    const {source} = sheetCache[url];
+    frameCache[id] = new PIXI.Texture({ source, frame: new PIXI.Rectangle(x*40, y*40, 40, 40) });
+  }
+}
+
+/* =======================================================================================
+   Map decode (PNG + JSON) incl. gates
+======================================================================================= */
+let wallMap=[], globalMap=[], allTiles;
+let mapWidthGrid=0, mapHeightGrid=0, mapWidthPixels=0, mapHeightPixels=0;
+let jsonData=null;
+
+const wallData = [
+  { id:1, name:'Wall',  wallSolids:0xff },
+  { id:2, name:'45TL',  wallSolids:0xd2 },
+  { id:3, name:'45TR',  wallSolids:0x4b },
+  { id:4, name:'45BL',  wallSolids:0xb4 },
+  { id:5, name:'45BR',  wallSolids:0x2d }
+];
+
+const tileData = [
+  { id:1,  name:'Wall',        x:13, y:4, image:'tiles', shape:'square',   size:'40', sensor:false, layer:'background' },
+  { id:2,  name:'45TL',        x:13, y:4, image:'tiles', shape:'triangle', size:'40', sensor:false, layer:'background', rotation:'180' },
+  { id:3,  name:'45TR',        x:13, y:4, image:'tiles', shape:'triangle', size:'40', sensor:false, layer:'background', rotation:'270' },
+  { id:4,  name:'45BL',        x:13, y:4, image:'tiles', shape:'triangle', size:'40', sensor:false, layer:'background', rotation:'90'  },
+  { id:5,  name:'45BR',        x:13, y:4, image:'tiles', shape:'triangle', size:'40', sensor:false, layer:'background', rotation:'0'   },
+  { id:6,  name:'Floor',       x:13, y:4, image:'tiles', layer:'background' },
+
+  { id:7,  name:'YellowFlag',  x:13, y:1, image:'tiles', shape:'circle',   size:'15', sensor:true,  layer:'midground' },
+  { id:8,  name:'RedFlag',     x:14, y:1, image:'tiles', shape:'circle',   size:'15', sensor:true,  layer:'midground' },
+  { id:9,  name:'BlueFlag',    x:15, y:1, image:'tiles', shape:'circle',   size:'15', sensor:true,  layer:'midground' },
+
+  { id:10, name:'Spike',       x:12, y:0, image:'tiles', shape:'circle',   size:'14', sensor:true,  layer:'background' },
+  { id:11, name:'gravitywell', x:13, y:0, image:'tiles', shape:'circle',   size:'14', sensor:true,  layer:'background' },
+
+  { id:15, name:'RedGoal',     x:14, y:5, image:'tiles', shape:'circle',   size:'40', sensor:true,  layer:'background' },
+  { id:16, name:'BlueGoal',    x:15, y:5, image:'tiles', shape:'circle',   size:'40', sensor:true,  layer:'background' },
+
+  { id:17, name:'RedTile',     x:14, y:4, image:'tiles', layer:'background' },
+  { id:18, name:'BlueTile',    x:15, y:4, image:'tiles', layer:'background' },
+  { id:19, name:'YellowTile',  x:13, y:5, image:'tiles', layer:'background' },
+
+  { id:20, name:'Bomb',        x:12, y:1, image:'tiles', shape:'circle',   size:'15', sensor:true,  layer:'midground' },
+  { id:21, name:'Button',      x:13, y:6, image:'tiles', shape:'circle',   size:'8',  sensor:true,  layer:'background' },
+
+  { id:22, name:'EmptyGate',   x:12, y:3, image:'tiles', shape:'square',   size:'40', sensor:true,  layer:'midground' },
+  { id:23, name:'GreenGate',   x:13, y:3, image:'tiles', shape:'square',   size:'40', sensor:true,  layer:'midground' },
+  { id:24, name:'RedGate',     x:14, y:3, image:'tiles', shape:'square',   size:'40', sensor:true,  layer:'midground' },
+  { id:25, name:'BlueGate',    x:15, y:3, image:'tiles', shape:'square',   size:'40', sensor:true,  layer:'midground' },
+
+  { id:29, name:'Portal',      x:0,  y:0, image:'portal',    shape:'circle', size:'15', sensor:true, layer:'midground' },
+  { id:30, name:'RedPortal',   x:0,  y:0, image:'redportal', shape:'circle', size:'15', sensor:true, layer:'midground' },
+  { id:31, name:'BluePortal',  x:0,  y:0, image:'blueportal',shape:'circle', size:'15', sensor:true, layer:'midground' },
+
+  { id:32, name:'Boost',       x:0,  y:0, image:'boost',     shape:'circle', size:'15', sensor:true, layer:'midground' },
+  { id:33, name:'RedBoost',    x:0,  y:0, image:'redboost',  shape:'circle', size:'15', sensor:true, layer:'midground' },
+  { id:34, name:'BlueBoost',   x:0,  y:0, image:'blueboost', shape:'circle', size:'15', sensor:true, layer:'midground' },
+
+  { id:35, name:'RedBall',     x:14, y:0, image:'tiles' },
+  { id:36, name:'BlueBall',    x:15, y:0, image:'tiles' }
+];
+
+const colorToTileId = new Map([
+  ['#787878',1], ['#408050',2], ['#405080',3], ['#807040',4], ['#804070',5],
+  ['#d4d4d4',6],
+  ['#808000',7], ['#ff0000',8], ['#0000ff',9],
+  ['#373737',10],['#202020',11],
+  ['#b90000',15], ['#190094',16],
+  ['#dcbaba',17], ['#bbb8dd',18], ['#dcdcba',19],
+  ['#ff8000',20],
+  ['#b97a57',21],
+  // '#007500' (gates) handled by JSON defaultState
+]);
+
+function wallSolidsAt(col,row){
+  if(col<0||row<0||row>=wallMap.length||col>=wallMap[0].length) return 0;
+  return wallMap[row][col]||0;
+}
+
+async function makeMapArray(mapId){
+  wallMap = []; globalMap = [];
+  const imgUrl  = CORS + `https://fortunatemaps.herokuapp.com/png/${mapId}.png`;
+  const jsonUrl = CORS + `https://fortunatemaps.herokuapp.com/json/${mapId}.json`;
+  jsonData = await loadJson(jsonUrl);
+
+  const img = new Image(); img.crossOrigin='anonymous';
+  await new Promise((res,rej)=>{ img.onload=res; img.onerror=rej; img.src=imgUrl; });
+  const W = img.naturalWidth, H = img.naturalHeight;
+
+  const canvas = document.createElement('canvas'); canvas.width=W; canvas.height=H;
+  const ctx = canvas.getContext('2d'); ctx.drawImage(img,0,0);
+  const data = ctx.getImageData(0,0,W,H).data;
+
+  const walls = new Map([
+    ['#787878', 0xff], ['#408050',0xd2], ['#405080',0x4b], ['#807040',0xb4], ['#804070',0x2d]
+  ]);
+
+  globalMap = Array.from({length:H}, ()=> Array(W).fill(0));
+  wallMap   = Array.from({length:H}, ()=> Array(W).fill(0));
+
+  for(let y=0;y<H;y++){
+    for(let x=0;x<W;x++){
+      const i=(y*W+x)*4, r=data[i], g=data[i+1], b=data[i+2], a=data[i+3];
+      if(a===0) continue;
+      const hex = '#'+rgbHex(r,g,b);
+      wallMap[y][x] = walls.get(hex) || 0;
+      if(hex.toLowerCase()==='#007500'){
+        globalMap[y][x] = determineGateId(x,y,jsonData);
+      } else {
+        globalMap[y][x] = colorToTileId.get(hex.toLowerCase()) || 0;
+      }
+    }
+  }
+  mapWidthGrid=W; mapHeightGrid=H; mapWidthPixels=W*40; mapHeightPixels=H*40;
+}
+function determineGateId(x,y,json){
+  const key = `${x},${y}`, field = json?.fields?.[key];
+  if(field && field.defaultState){
+    const s = String(field.defaultState).toLowerCase();
+    if(s==='green') return 23; if(s==='red') return 24; if(s==='blue') return 25;
+  }
+  return 22; // empty
+}
+
+/* Walls draw (quadrants) */
+const quadrantCoords={ /* omitted for brevity in comment; all entries kept */
+"132":[10.5,7.5],"232":[11,7.5],"332":[11,8],"032":[10.5,8],
+"132d":[0.5,3.5],"232d":[1,3.5],"032d":[0.5,4],
+"143":[4.5,9.5],"243":[5,9.5],"343":[5,10],"043":[4.5,10],
+"143d":[1.5,2.5],"243d":[2,2.5],"043d":[1.5,3],
+"154":[6.5,9.5],"254":[7,9.5],"354":[7,10],"054":[6.5,10],
+"154d":[9.5,2.5],"254d":[10,2.5],"354d":[10,3],
+"165":[0.5,7.5],"265":[1,7.5],"365":[1,8],"065":[0.5,8],
+"165d":[10.5,3.5],"265d":[11,3.5],"365d":[11,4],
+"176":[1.5,6.5],"276":[2,6.5],"376":[2,7],"076":[1.5,7],
+"276d":[9,1.5],"376d":[9,2],"076d":[8.5,2],
+"107":[6.5,8.5],"207":[7,8.5],"307":[7,9],"007":[6.5,9],
+"207d":[11,1.5],"307d":[11,2],"007d":[10.5,2],
+"110":[4.5,8.5],"210":[5,8.5],"310":[5,9],"010":[4.5,9],
+"110d":[0.5,1.5],"310d":[1,2],"010d":[0.5,2],
+"121":[9.5,6.5],"221":[10,6.5],"321":[10,7],"021":[9.5,7],
+"121d":[2.5,1.5],"321d":[3,2],"021d":[2.5,2],
+"142":[1.5,7.5],"242":[2,7.5],"042":[1.5,8],
+"142d":[10.5,0.5],"242d":[11,0.5],"042d":[10.5,1],
+"153":[5.5,6.5],"253":[6,6.5],"353":[6,7],"053":[5.5,7],
+"153d":[5.5,0.5],"253d":[6,0.5],
+"164":[9.5,7.5],"264":[10,7.5],"364":[10,8],
+"164d":[0.5,0.5],"264d":[1,0.5],"364d":[1,1],
+"175":[4.5,5.5],"275":[5,5.5],"375":[5,6],"075":[4.5,6],
+"275d":[7,1.5],"375d":[7,2],
+"206":[4.5,9.5],"306":[4.5,10],"006":[3.5,10],
+"206d":[2,3.5],"306d":[2,4],"006d":[1.5,4],
+"117":[5.5,2.5],"217":[6,2.5],"317":[6,4],"017":[5.5,4],
+"317d":[6,3],"017d":[5.5,3],
+"120":[7.5,9.5],"320":[8,10],"020":[7.5,10],
+"120d":[9.5,3.5],"320d":[10,4],"020d":[9.5,4],
+"131":[6.5,5.5],"231":[7,5.5],"331":[7,6],"031":[6.5,6],
+"131d":[4.5,1.5],"031d":[4.5,2],
+"141":[7.5,8.5],"241":[8,8.5],"323":[4,5],"041":[7.5,9],
+"141d":[8.5,3.5],"041d":[8.5,4],
+"152":[8.5,7.5],"252":[9,7.5],"334":[2,0],"052":[8.5,8],
+"152d":[3.5,0.5],"252d":[4,0.5],
+"163":[2,7.5],"263":[3,7.5],"363":[3,8],"045":[9.5,0],
+"163d":[7.5,0.5],"263d":[8,0.5],
+"174":[3.5,8.5],"274":[4,8.5],"374":[4,9],"056":[7.5,5],
+"274d":[3,3.5],"374d":[3,4],
+"167":[7.5,6.5],
+"205":[10,8.5],"305":[10,9],"005":[9.5,9],
+"205d":[2,0.5],"305d":[2,1],
+"170":[6.5,7.5],
+"216":[9,9.5],"316":[9,10],"016":[8.5,10],
+"316d":[10,5],"016d":[9.5,5],
+"127":[2.5,9.5],"201":[5,7.5],"327":[3,10],"027":[2.5,10],
+"327d":[2,5],"027d":[1.5,5],
+"130":[1.5,8.5],"212":[4,6.5],"330":[2,9],"030":[1.5,9],
+"130d":[9.5,0.5],"030d":[9.5,1],
+"151":[10.5,9.5],"251":[11,9.5],"324":[0,7],
+"051":[10.5,10],"151d":[10.5,4.5],"324d":[0,0],
+"162":[8.5,10.5],"262":[9,10.5],"335":[6,8],"035":[5.5,8],
+"162d":[3.5,2.5],"262d":[8,2.5],
+"173":[0.5,9.5],"273":[1,9.5],"373":[1,10],
+"046":[11.5,7],"046d":[11.5,0],"273d":[1,4.5],
+"157":[11.5,8.5],"204":[0,5.5],"304":[0,5],"057":[11.5,9],
+"204d":[0,4.5],"304d":[0,6],
+"160":[11.5,7.5],"215":[8,6.5],"315":[8,7],"015":[7.5,7],
+"160d":[2.5,4.5],"315d":[9,3],
+"171":[5.5,10.5],"271":[6,10.5],"326":[6,5],"026":[5.5,5],
+"326d":[7,5],"026d":[4.5,5],
+"137":[3.5,6.5],"202":[0,7.5],"337":[4,7],"037":[3.5,7],
+"202d":[9,4.5],"037d":[2.5,3],
+"140":[11.5,5.5],"213":[0,8.5],"313":[0,9],"040":[11.5,5],
+"140d":[11.5,4.5],"040d":[11.5,6],
+"161":[9.5,10.5],"261":[10,10.5],"325":[9,6],"025":[8.5,6],
+"161d":[3.5,1.5],"325d":[4,1],
+"172":[1.5,10.5],"272":[2,10.5],"336":[3,6],"036":[2.5,6],
+"036d":[7.5,1],"272d":[8,1.5],
+"147":[4.5,7.5],"203":[4,3.5],"303":[4,4],"047":[4.5,8],
+"047d":[8.5,5],"203d":[8,4.5],
+"150":[7.5,3.5],"214":[7,7.5],"314":[7,8],"050":[7.5,4],
+"150d":[3.5,4.5],"314d":[3,5],
+"100":[5.5,5.5],"200":[6,5.5],"300":[6,6],"000":[5.5,6],
+"100d":[5.5,8.5],"200d":[6,8.5],"300d":[6,10],"000d":[5.5,10]
+};
+
+function drawWallTile(col,row){
+  const solids = wallMap[row][col];
+  if(!solids) return;
+  for(let q=0;q<4;q++){
+    const mask=(solids>>(q<<1))&3; if(mask===0) continue;
+    const cornerX = col + ((q&2)===0?1:0);
+    const cornerY = row + (((q+1)&2)===0?0:1);
+    let around =
+      (wallSolidsAt(cornerX,cornerY)     & 0xc0) |
+      (wallSolidsAt(cornerX-1,cornerY)   & 0x03) |
+      (wallSolidsAt(cornerX-1,cornerY-1) & 0x0c) |
+      (wallSolidsAt(cornerX,cornerY-1)   & 0x30);
+    around |= (around<<8);
+    const start=q*2+1;
+    let cw=0; while(cw<8&&(around&(1<<(start+cw)))) cw++;
+    let ccw=0; while(ccw<8&&(around&(1<<(start+7-ccw)))) ccw++;
+    const hasChip=(mask===3 && (((solids|(solids<<8))>>((q+2)<<1))&3)===0);
+    const solidEnd=cw===8?0:(start+cw+4)%8, solidStart=cw===8?0:(start-ccw+12)%8;
+    const key=`${q}${solidStart}${solidEnd}${hasChip?'d':''}`;
+    const coord=quadrantCoords[key]||[5.5,5.5];
+    const xoff=(q===0||q===1)?20:0, yoff=(q===1||q===2)?20:0;
+    const texRect=new PIXI.Rectangle(coord[0]*40,coord[1]*40,20,20);
+    const base = sheetCache[sheetUrls.tiles].source;
+    const tex=new PIXI.Texture({source:base, frame:texRect});
+    const spr=new PIXI.Sprite(tex); spr.x=col*40+xoff; spr.y=row*40+yoff;
+    background.addChild(spr);
+  }
+}
+
+function drawTile(id,x,y,layer){
+  const tex=frameCache[id]; if(!tex) return null;
+  const container = (layer==='midground' ? midground : (layer==='foreground'?foreground:background));
+  const sprite = new PIXI.Sprite(tex); sprite.x=x; sprite.y=y; container.addChild(sprite);
+  const gx=Math.floor(x/40), gy=Math.floor(y/40);
+  if(!allTiles[gx][gy]) allTiles[gx][gy]=[];
+  if(layer!=='background') allTiles[gx][gy][1]=sprite;
+  return sprite;
+}
+function drawTilesLoop(){
+  background.removeChildren(); midground.removeChildren(); foreground.removeChildren();
+  for(let y=0;y<mapHeightGrid;y++){
+    for(let x=0;x<mapWidthGrid;x++){
+      const id=globalMap[y][x]; if(id===0){ drawWallTile(x,y); continue; }
+      const def=tileData.find(t=>t.id===id);
+      if(!def){ drawWallTile(x,y); continue; }
+      if(def.layer!=='background'){
+        const floor=frameCache[6]; if(floor){ const bg=new PIXI.Sprite(floor); bg.x=x*40; bg.y=y*40; background.addChild(bg); }
+      }
+      drawTile(id, x*40, y*40, def.layer);
+      drawWallTile(x,y);
+    }
+  }
+}
+
+/* =======================================================================================
+   Physics + game logic (flags, spawns, scoring & stats)
+======================================================================================= */
+const b2Vec2 = Box2D.Common.Math.b2Vec2, b2World = Box2D.Dynamics.b2World, b2BodyDef=Box2D.Dynamics.b2BodyDef,
+      b2Body=Box2D.Dynamics.b2Body, b2FixtureDef=Box2D.Dynamics.b2FixtureDef, b2CircleShape=Box2D.Collision.Shapes.b2CircleShape,
+      b2PolygonShape=Box2D.Collision.Shapes.b2PolygonShape, b2ContactListener=Box2D.Dynamics.b2ContactListener,
+      b2AABB = Box2D.Collision.b2AABB;
+
+let world;
+function initPhysics(){ world = new b2World(new b2Vec2(0,0), true); world.SetContactListener(createContactListener()); }
+
+function createPhysicsBody(gridX, gridY, tileName, size=40, shape='square', sensor=false, rotationDeg=0){
+  const bodyDef = new b2BodyDef(); bodyDef.type=b2Body.b2_staticBody;
+  bodyDef.position.Set((gridX+0.5)*gridSizeTPU, (gridY+0.5)*gridSizeTPU);
+  bodyDef.angle = rotationDeg*Math.PI/180;
+  const body = world.CreateBody(bodyDef);
+  const fixDef = new b2FixtureDef(); fixDef.isSensor=!!sensor;
+  const meter = parseFloat(size)/100;
+  if(shape==='circle') fixDef.shape = new b2CircleShape(meter);
+  else if(shape==='square'){ fixDef.shape=new b2PolygonShape(); fixDef.shape.SetAsBox(meter/2,meter/2); }
+  else if(shape==='triangle'){ const h=meter/2; const verts=[new b2Vec2(+h,+h), new b2Vec2(-h,+h), new b2Vec2(+h,-h)];
+    fixDef.shape=new b2PolygonShape(); fixDef.shape.SetAsArray(verts, verts.length); }
+  const fixture = body.CreateFixture(fixDef);
+  fixture.SetUserData({ tile: tileName, gridX, gridY });
+  if(!allTiles[gridX][gridY]) allTiles[gridX][gridY]=[]; allTiles[gridX][gridY][0]=body;
+  return body;
+}
+function createAllPhysicsBodies(){
+  for(let y=0;y<mapHeightGrid;y++) for(let x=0;x<mapWidthGrid;x++){
+    const id=globalMap[y][x]; if(!id) continue;
+    const t=tileData.find(d=>d.id===id); if(!t||!t.shape) continue;
+    createPhysicsBody(x,y,t.name, parseFloat(t.size||'40'), t.shape, !!t.sensor, parseFloat(t.rotation||'0'));
+  }
+}
+
+/* Contact handling */
+const balls = []; let playerBall=null;
+
+function createContactListener(){
+  const L=new b2ContactListener();
+  L.BeginContact = (c)=>{
+    handleBoost(c); handleBomb(c); handleFlagPickupOrScore(c); handleGoalScore(c); handleBallVsBall(c); applyRollingCorrection(c);
+  };
+  return L;
+}
+
+function applyRollingCorrection(contact){
+  try{
+    const wm=new Box2D.Collision.b2WorldManifold(); contact.GetWorldManifold(wm);
+    const fA=contact.GetFixtureA(), fB=contact.GetFixtureB();
+    const isBall=f=>f?.GetUserData?.()?.type==='ball'; const fb=isBall(fA)?fA:(isBall(fB)?fB:null); if(!fb) return;
+    const body=fb.GetBody(); const v=body.GetLinearVelocity();
+    const tx=-wm.m_normal.y, ty=wm.m_normal.x; const tang=v.x*tx+v.y*ty; const sign=tang>=0?1:-1;
+    const speed=Math.hypot(v.x,v.y); const desired=sign*(speed/playerProps.radius);
+    const cur=body.GetAngularVelocity(); body.SetAngularVelocity(cur + 0.11*(desired-cur));
+  }catch{}
+}
+
+function handleBoost(c){
+  const fA=c.GetFixtureA(), fB=c.GetFixtureB(), dA=fA.GetUserData(), dB=fB.GetUserData();
+  let b=null;
+  if(dA?.type==='ball' && /Boost$/.test(dB?.tile||'')) b=fA.GetBody();
+  else if(dB?.type==='ball' && /Boost$/.test(dA?.tile||'')) b=fB.GetBody();
+  else return;
+  const v=b.GetLinearVelocity(); const m=Math.hypot(v.x,v.y)||1; const s=(playerProps.maxSpeed*2.9)/m;
+  b.SetLinearVelocity(new b2Vec2(v.x*s, v.y*s));
+}
+
+function handleBomb(c){
+  const fA=c.GetFixtureA(), fB=c.GetFixtureB(), dA=fA.GetUserData(), dB=fB.GetUserData();
+  let centerBody=null;
+  if(dA?.tile==='Bomb' && dB?.type==='ball') centerBody=fA.GetBody();
+  else if(dB?.tile==='Bomb' && dA?.type==='ball') centerBody=fB.GetBody();
+  else return;
+  explode(centerBody.GetPosition(), 2.8, 12);
+}
+
+/* ================= Flags registry & visuals ================= */
+const flags=[]; const flagByGrid=new Map();
+function getFlagByGrid(x,y){ return flagByGrid.get(`${x},${y}`)||null; }
+
+function scanFlagsAndMakeMinis(){
+  flags.length=0; flagByGrid.clear();
+  for(let y=0;y<mapHeightGrid;y++) for(let x=0;x<mapWidthGrid;x++){
+    const id=globalMap[y][x]; if(id!==7 && id!==8 && id!==9) continue;
+    const sprite=allTiles[x][y]?.[1]||null;
+    const kind=(id===7?'neutral':(id===8?'red':'blue'));
+    const miniTex=frameCache[id]; const mini=new PIXI.Sprite(miniTex);
+    mini.anchor.set(0.5,1.0); mini.visible=false; mini.zIndex=10; foreground.addChild(mini);
+    const entry={ kind, gridX:x, gridY:y, sprite, mini, state:'atBase', carrier:null };
+    flags.push(entry); flagByGrid.set(`${x},${y}`, entry);
+  }
+}
+
+function takeFlag(ball, flag){
+  if(flag.state!=='atBase' || ball.carrying) return;
+  flag.state='taken'; flag.carrier=ball; ball.carrying=flag;
+  if(flag.sprite) flag.sprite.alpha = 0.35;
+  flag.mini.visible=true;
+  // stats: grab + hold start
+  stats[ball.team].grabs++;
+  holdStart(ball);
+  refreshStatsUI();
+}
+function returnFlagToBase(flag){
+  if(flag.carrier){ holdStop(flag.carrier); flag.carrier.carrying=null; }
+  flag.state='atBase'; flag.carrier=null;
+  if(flag.sprite) flag.sprite.alpha=1.0;
+  flag.mini.visible=false;
+}
+function transferFlag(fromBall, toBall, flag){
+  if(fromBall.carrying!==flag) return;
+  holdStop(fromBall);
+  fromBall.carrying=null;
+  flag.carrier=toBall; toBall.carrying=flag;
+  holdStart(toBall);
+}
+
+/* ================= Stats (score/grabs/hold/drops/returns) ================= */
+const stats = {
+  red:  { score:0, grabs:0, holdMs:0, drops:0, returns:0, liveHolds: new Set() },
+  blue: { score:0, grabs:0, holdMs:0, drops:0, returns:0, liveHolds: new Set() }
+};
+function holdStart(ball){
+  if(ball._holdStartMs!=null) return;
+  ball._holdStartMs = performance.now();
+  stats[ball.team].liveHolds.add(ball);
+}
+function holdStop(ball){
+  if(ball._holdStartMs==null) return;
+  const now=performance.now();
+  const delta=now - ball._holdStartMs;
+  stats[ball.team].holdMs += Math.max(0, delta);
+  ball._holdStartMs = null;
+  stats[ball.team].liveHolds.delete(ball);
+}
+function teamHoldTotal(team){
+  let ms = stats[team].holdMs;
+  const now = performance.now();
+  for(const b of stats[team].liveHolds){
+    if(b._holdStartMs!=null) ms += Math.max(0, now - b._holdStartMs);
+  }
+  return ms;
+}
+
+/* UI update for mini + modal */
+function refreshStatsUI(){
+  document.getElementById('miniRedScore').textContent = String(stats.red.score);
+  document.getElementById('miniBlueScore').textContent = String(stats.blue.score);
+
+  document.getElementById('stat-red-score').textContent   = String(stats.red.score);
+  document.getElementById('stat-red-grabs').textContent   = String(stats.red.grabs);
+  document.getElementById('stat-red-drops').textContent   = String(stats.red.drops);
+  document.getElementById('stat-red-returns').textContent = String(stats.red.returns);
+  document.getElementById('stat-red-hold').textContent    = mmss(teamHoldTotal('red'));
+
+  document.getElementById('stat-blue-score').textContent   = String(stats.blue.score);
+  document.getElementById('stat-blue-grabs').textContent   = String(stats.blue.grabs);
+  document.getElementById('stat-blue-drops').textContent   = String(stats.blue.drops);
+  document.getElementById('stat-blue-returns').textContent = String(stats.blue.returns);
+  document.getElementById('stat-blue-hold').textContent    = mmss(teamHoldTotal('blue'));
+}
+
+/* Scoring rules */
+function addScore(team){
+  stats[team].score++;
+  refreshStatsUI();
+}
+
+function handleGoalScore(c){
+  const fA=c.GetFixtureA(), fB=c.GetFixtureB(), dA=fA.GetUserData(), dB=fB.GetUserData();
+  let ball=null, goal=null;
+  if(dA?.type==='ball' && (dB?.tile==='RedGoal' || dB?.tile==='BlueGoal')){ ball=dA.ref; goal=dB.tile; }
+  else if(dB?.type==='ball' && (dA?.tile==='RedGoal' || dA?.tile==='BlueGoal')){ ball=dB.ref; goal=dA.tile; }
+  else return;
+
+  const team=ball.team;
+  if((team==='red' && goal==='RedGoal') || (team==='blue' && goal==='BlueGoal')){
+    if(ball.carrying){
+      addScore(team);
+      // return carried flag & stop hold
+      returnFlagToBase(ball.carrying);
+      ball.carrying=null;
+      refreshStatsUI();
+    }
+  }
+}
+
+function handleFlagPickupOrScore(c){
+  const fA=c.GetFixtureA(), fB=c.GetFixtureB(), dA=fA.GetUserData(), dB=fB.GetUserData();
+  let ballFix=null, flagFix=null;
+  const isFlag = t => /Flag$/.test(t||'');
+  if(dA?.type==='ball' && isFlag(dB?.tile)){ ballFix=fA; flagFix=fB; }
+  else if(dB?.type==='ball' && isFlag(dA?.tile)){ ballFix=fB; flagFix=fA; }
+  else return;
+
+  const ball=ballFix.GetUserData().ref;
+  const {gridX, gridY} = flagFix.GetUserData();
+  const flag = getFlagByGrid(gridX, gridY); if(!flag) return;
+
+  // Scoring by touching own in-base flag while holding enemy flag
+  if(flag.kind===ball.team && flag.state==='atBase' && ball.carrying && ball.carrying.kind!==ball.team){
+    addScore(ball.team);
+    returnFlagToBase(ball.carrying);
+    ball.carrying=null;
+    refreshStatsUI();
+    return;
+  }
+
+  // Normal pickup
+  if(flag.state==='atBase' && !ball.carrying){
+    if(flag.kind==='neutral' || (flag.kind==='red' && ball.team==='blue') || (flag.kind==='blue' && ball.team==='red')){
+      takeFlag(ball, flag);
+      refreshStatsUI();
+    }
+  }
+}
+
+function handleBallVsBall(c){
+  const fA=c.GetFixtureA(), fB=c.GetFixtureB(), dA=fA.GetUserData(), dB=fB.GetUserData();
+  if(dA?.type!=='ball' || dB?.type!=='ball') return;
+  const A=dA.ref, B=dB.ref; if(A.team===B.team) return;
+
+  const carrier = A.carrying?A:(B.carrying?B:null);
+  const tagger  = carrier===A ? B : (carrier ? A : null);
+  if(!carrier || !tagger) return;
+
+  const flag=carrier.carrying;
+  // Stats: tagger made a return (tags), carrier dropped
+  stats[tagger.team].returns++;
+  stats[carrier.team].drops++;
+  refreshStatsUI();
+
+  if(flag.kind==='neutral'){
+    // handoff neutral to tagger
+    transferFlag(carrier, tagger, flag);
+  } else {
+    // team flags return to base
+    returnFlagToBase(flag);
+  }
+  popAndRespawn(carrier);
+}
+
+/* Pop + respawn at JSON spawnPoints with offsets */
+function tileOccupied(tx,ty){
+  for(const e of balls){
+    if(!e.alive) continue;
+    const sx=Math.floor(e.sprite.x/40), sy=Math.floor(e.sprite.y/40);
+    if(sx===tx && sy===ty) return true;
+  }
+  return false;
+}
+function pickTeamSpawn(team){
+  const list=jsonData?.spawnPoints?.[team]||[];
+  if(!list.length) return { tileX:(mapWidthGrid/2)+0.5, tileY:(mapHeightGrid/2)+0.5 };
+  const total=list.reduce((s,p)=>s+(p.weight||1),0); let r=Math.random()*total, chosen=list[0];
+  for(const p of list){ r -= (p.weight||1); if(r<=0){ chosen=p; break; } }
+  const rad=chosen.radius||0, ang=randRange(0,Math.PI*2), dist=Math.random()*rad;
+  let tileX=chosen.x + Math.cos(ang)*dist + 0.5, tileY=chosen.y + Math.sin(ang)*dist + 0.5;
+
+  const extra=randInt(1,5), axis=Math.random()<0.5?'x':'y', sign=Math.random()<0.5?-1:1;
+  if(axis==='x') tileX += sign*extra; else tileY += sign*extra;
+
+  let tx=Math.max(0,Math.min(mapWidthGrid-1, Math.floor(tileX)));
+  let ty=Math.max(0,Math.min(mapHeightGrid-1, Math.floor(tileY)));
+  let tries=0;
+  while(tileOccupied(tx,ty) && tries<12){
+    if(Math.random()<0.5) tx = Math.max(0,Math.min(mapWidthGrid-1, tx + (Math.random()<0.5?-1:1)));
+    else                  ty = Math.max(0,Math.min(mapHeightGrid-1, ty + (Math.random()<0.5?-1:1)));
+    tries++;
+  }
+  return { tileX: tx+0.5, tileY: ty+0.5 };
+}
+
+function popAndRespawn(entry){
+  entry.alive=false;
+  entry.sprite.visible=false; if(entry.nameText) entry.nameText.visible=false;
+  for(let f=entry.body.GetFixtureList(); f; f=f.GetNext()) f.SetSensor(true);
+  setTimeout(()=>{
+    setBodyToTeamSpawn(entry);
+    entry.body.SetLinearVelocity(new b2Vec2(0,0));
+    entry.sprite.visible=true; if(entry.nameText) entry.nameText.visible=true;
+    for(let f=entry.body.GetFixtureList(); f; f=f.GetNext()) f.SetSensor(false);
+    entry.alive=true;
+  }, Math.max(0,RESPAWN_DELAY_SEC*1000));
+}
+
+function setBodyToTeamSpawn(entry){
+  const s=pickTeamSpawn(entry.team);
+  entry.body.SetPosition(new b2Vec2(s.tileX*gridSizeTPU, s.tileY*gridSizeTPU));
+  entry.body.SetAwake(true);
+}
+
+/* Balls, input, camera */
+function createBall(tpuX,tpuY,team='red',name="",controlled=false){
+  const bd=new b2BodyDef(); bd.type=b2Body.b2_dynamicBody; bd.position.Set(tpuX,tpuY);
+  bd.linearDamping=playerProps.linearDamping; bd.angularDamping=playerProps.angularDamping; bd.bullet=true;
+  const body=world.CreateBody(bd);
+  const fd=new b2FixtureDef(); fd.shape=new b2CircleShape(playerProps.radius);
+  fd.density=playerProps.density; fd.friction=playerProps.friction; fd.restitution=playerProps.restitution;
+  const fixture=body.CreateFixture(fd);
+
+  const sprite=new PIXI.Sprite(team==='red'?frameCache[35]:frameCache[36]); sprite.anchor.set(0.5); foreground.addChild(sprite);
+  let label=null; if(name){
+    label=new PIXI.Text({ text:name.slice(0,24), style:new PIXI.TextStyle({
+      fontFamily:'Arial', fontSize:12, fontWeight:'bold', fill:team==='red'?0xfff3f3:0xf3f7ff,
+      stroke:0x000000, strokeThickness:3, dropShadow:true, dropShadowColor:'#000', dropShadowBlur:3, dropShadowDistance:0 }) });
+    label.anchor.set(0.5); foreground.addChild(label);
+  }
+
+  const entry={ body, fixture, sprite, nameText:label, team, input:{left:false,right:false,up:false,down:false}, controlled, carrying:null, alive:true, _holdStartMs:null };
+  body.SetUserData({ type:'ball', team, ref:entry }); fixture.SetUserData({ type:'ball', team, ref:entry });
+  balls.push(entry); if(controlled) playerBall=entry; return entry;
+}
+function syncBallSprites(){
+  for(const e of balls){
+    const p=e.body.GetPosition(); e.sprite.x=tpuToPx(p.x); e.sprite.y=tpuToPx(p.y); e.sprite.rotation=e.body.GetAngle();
+    if(e.nameText){ e.nameText.x=e.sprite.x; e.nameText.y=e.sprite.y - e.sprite.height*0.65; }
+  }
+}
+function applyMovement(){
+  for(const e of balls){
+    if(!e.controlled) continue;
+    const v=e.body.GetLinearVelocity(); let vx=v.x, vy=v.y;
+    let ix=0,iy=0; if(e.input.left)ix--; if(e.input.right)ix++; if(e.input.up)iy--; if(e.input.down)iy++;
+    const len=Math.hypot(ix,iy);
+    if(len>0){
+      ix/=len; iy/=len; vx+=ix*playerProps.accel; vy+=iy*playerProps.accel;
+      const sp=Math.hypot(vx,vy); if(sp>playerProps.topSpeed){ const s=playerProps.topSpeed/sp; vx*=s; vy*=s; }
+      e.body.SetLinearVelocity(new b2Vec2(vx,vy)); e.body.SetAwake(true);
+    }
+  }
+}
+window.addEventListener('keydown', e=>{
+  if(!playerBall) return;
+  switch(e.key){
+    case 'ArrowLeft': case 'a': case 'A': playerBall.input.left=true; break;
+    case 'ArrowRight': case 'd': case 'D': playerBall.input.right=true; break;
+    case 'ArrowUp': case 'w': case 'W': playerBall.input.up=true; break;
+    case 'ArrowDown': case 's': case 'S': playerBall.input.down=true; break;
+  }
+},{passive:false});
+window.addEventListener('keyup', e=>{
+  if(!playerBall) return;
+  switch(e.key){
+    case 'ArrowLeft': case 'a': case 'A': playerBall.input.left=false; break;
+    case 'ArrowRight': case 'd': case 'D': playerBall.input.right=false; break;
+    case 'ArrowUp': case 'w': case 'W': playerBall.input.up=false; break;
+    case 'ArrowDown': case 's': case 'S': playerBall.input.down=false; break;
+    case 'Escape': toggleStatsModal(); break;
+  }
+});
+
+/* Flag mini sprites follow carriers */
+function updateFlagMinis(){
+  for(const fl of flags){
+    if(fl.state==='taken' && fl.carrier){
+      fl.mini.visible=true;
+      fl.mini.x=fl.carrier.sprite.x;
+      fl.mini.y=fl.carrier.sprite.y - fl.carrier.sprite.height*FLAG_HOVER_MULT + FLAG_EXTRA_PX;
+    } else fl.mini.visible=false;
+  }
+}
+
+/* Camera center on player */
+function centerCamera(){
+  if(!playerBall) return;
+  const p=playerBall.body.GetPosition(); const px=tpuToPx(p.x), py=tpuToPx(p.y);
+  app.stage.position.set(app.renderer.screen.width/2 - px, app.renderer.screen.height/2 - py);
+}
+
+/* Explosions (bomb) */
+function explode(center, radius=2.8, strength=12){
+  const aabb=new b2AABB(); aabb.lowerBound.Set(center.x-radius,center.y-radius); aabb.upperBound.Set(center.x+radius,center.y+radius);
+  world.QueryAABB(fix=>{
+    const b=fix.GetBody(); if(b.GetType()!==b2Body.b2_dynamicBody) return true;
+    const p=b.GetPosition(); const dx=p.x-center.x, dy=p.y-center.y; const d=Math.hypot(dx,dy);
+    if(d>0&&d<radius){ const k=strength*(radius-d); const dir=new b2Vec2(dx/d,dy/d); const v=b.GetLinearVelocity(); v.x+=dir.x*k; v.y+=dir.y*k; b.SetLinearVelocity(v); }
+    return true;
+  }, aabb);
+}
+
+/* =======================================================================================
+   Build & start
+======================================================================================= */
+let accumulator=0;
+function startTicker(){
+  app.ticker.add(()=>{
+    const dt=Math.min(app.ticker.deltaMS/1000, 0.05);
+    accumulator+=dt;
+    while(accumulator>=timestep){
+      applyMovement();
+      world.Step(timestep, 8, 3);
+      world.ClearForces();
+      accumulator-=timestep;
+    }
+    centerCamera();
+    syncBallSprites();
+    updateFlagMinis();
+    // live hold timers visual update
+    if(document.getElementById('statsModal').style.display==='grid') refreshStatsUI();
+  });
+}
+
+/* Stats modal toggle */
+function toggleStatsModal(){
+  const modal=document.getElementById('statsModal');
+  const open = modal.style.display!=='grid';
+  modal.style.display = open ? 'grid' : 'none';
+  if(open) refreshStatsUI();
+}
+
+/* =======================================================================================
+   Boot flow
+======================================================================================= */
+async function boot(mapId){
+  initPhysics();
+  await makeMapArray(mapId);
+  await mountPixi(); // canvas centered
+  // Delay texture caching & drawing until Start, so chosen pack applies
+  wireStart(mapId);
+}
+
+function wireStart(mapId){
+  document.getElementById('startBtn').addEventListener('click', async ()=>{
+    // Pick pack and map URLs
+    sheetUrls = urlsForPack(selectedPackId);
+    await cacheSheets();
+
+    allTiles = Array.from({length:mapWidthGrid}, ()=> Array.from({length:mapHeightGrid}, ()=>[]));
+    drawTilesLoop();
+    createAllPhysicsBodies();
+    scanFlagsAndMakeMinis();
+
+    // Spawn player & test bots
+    const name=(document.getElementById('playerName').value||'').trim();
+    const team=(document.querySelector('input[name="team"]:checked')?.value||'red');
+    const sp=pickTeamSpawn(team);
+    createBall(sp.tileX*gridSizeTPU, sp.tileY*gridSizeTPU, team, name, true);
+
+    const rb=pickTeamSpawn('red');  createBall(rb.tileX*gridSizeTPU, rb.tileY*gridSizeTPU, 'red',  'RedBot',  false);
+    const bb=pickTeamSpawn('blue'); createBall(bb.tileX*gridSizeTPU, bb.tileY*gridSizeTPU, 'blue', 'BlueBot', false);
+
+    document.getElementById('overlay').style.display='none';
+    refreshStatsUI();
+    startTicker();
+  }, { once:true });
+}
+
+boot(DEFAULT_MAP_ID).catch(err=>console.error(err));
+</script>
+</body>
+</html>
